@@ -503,7 +503,7 @@ CREATE TABLE IF NOT EXISTS requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp DATETIME NOT NULL,
     session_id TEXT NOT NULL,
-    request_id TEXT,
+    request_id TEXT NOT NULL,
     project TEXT,
     git_repository TEXT,
     model TEXT NOT NULL,
@@ -664,7 +664,7 @@ from pydantic import BaseModel, Field
 class UsageRecord(BaseModel):
     timestamp: datetime
     session_id: str
-    request_id: str | None
+    request_id: str
     project: str | None = None
     git_repository: str | None = None
     model: str
@@ -948,17 +948,19 @@ def derive_project(cwd: str) -> tuple[str | None, str | None]:
     """Return (project_name, git_repository) from a working directory."""
     path = Path(cwd)
     project = path.name or None
-    git_config = path / ".git" / "config"
     repo: str | None = None
-    if git_config.exists():
-        text = git_config.read_text(encoding="utf-8")
-        m = re.search(r"url\s*=\s*(.+)", text)
-        if m:
-            raw_url = m.group(1).strip()
-            # ssh or https -> extract owner/repo
-            repo_match = re.search(r"[:/]([^/]+/[^/]+?)(?:\.git)?$", raw_url)
-            if repo_match:
-                repo = repo_match.group(1)
+    for parent in [path] + list(path.parents):
+        git_config = parent / ".git" / "config"
+        if git_config.exists():
+            text = git_config.read_text(encoding="utf-8")
+            m = re.search(r"url\s*=\s*(.+)", text)
+            if m:
+                raw_url = m.group(1).strip()
+                # ssh or https -> extract owner/repo
+                repo_match = re.search(r"[:/]([^/]+/[^/]+?)(?:\.git)?$", raw_url)
+                if repo_match:
+                    repo = repo_match.group(1)
+            break
     return project, repo
 
 
@@ -996,7 +998,7 @@ def parse_incremental(config: Config) -> int:
                     rec = UsageRecord(
                         timestamp=_parse_iso_ts(record["timestamp"]),
                         session_id=record.get("sessionId", ""),
-                        request_id=record.get("requestId"),
+                        request_id=record.get("requestId") or f"missing-{line_no}",
                         project=project,
                         git_repository=repo,
                         model=model,
@@ -1587,6 +1589,8 @@ Create `src/claude_meter/cost.py`:
 """Cost calculation from usage records and cached pricing."""
 
 import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
 
 from claude_meter.config import Config
 from claude_meter.db import get_connection
@@ -1658,14 +1662,6 @@ def fill_missing_costs(config: Config, region: str | None = None) -> int:
         conn.commit()
     return updated
 ```
-
-Add `import datetime` at the top of `cost.py`:
-
-```python
-from datetime import datetime, timezone
-```
-
-and change the `UsageRecord` creation in `fill_missing_costs` to use `datetime.now(timezone.utc)` instead of `datetime.utcnow()`.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1806,7 +1802,7 @@ def ui(port: int | None, host: str | None) -> None:
     sys.argv = [
         "streamlit",
         "run",
-        str(__file__).replace("cli.py", "ui/app.py"),
+        str(Path(__file__).resolve().parent / "ui" / "app.py"),
         "--server.port",
         str(ui_port),
         "--server.address",
@@ -1815,7 +1811,7 @@ def ui(port: int | None, host: str | None) -> None:
     stcli.main()
 
 
-@main.command()
+@main.command(name="watch")
 @click.option("--poll", default=5.0, help="Polling interval in seconds (fallback when watchdog unavailable).")
 def watch_cmd(poll: float) -> None:
     """Watch ~/.claude for new JSONL data."""
@@ -2213,16 +2209,19 @@ def _model_tokens(conn, start: str, end: str) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["model", "tokens"])
 
 
-def _top_costly_prompts(conn, start: str, end: str, limit: int = 10) -> pd.DataFrame:
+def _top_costly_prompts(conn, start: str, end: str, show_prompts: bool, limit: int = 10) -> pd.DataFrame:
+    columns = "timestamp, project, model, cost_usd"
+    if show_prompts:
+        columns += ", prompt_text"
     rows = conn.execute(
-        """SELECT timestamp, project, model, cost_usd, prompt_text
+        f"""SELECT {columns}
            FROM requests
            WHERE timestamp >= ? AND timestamp < ?
            ORDER BY cost_usd DESC NULLS LAST
            LIMIT ?""",
         (start, end, limit),
     ).fetchall()
-    return pd.DataFrame(rows, columns=["timestamp", "project", "model", "cost_usd", "prompt_text"])
+    return pd.DataFrame(rows, columns=columns.replace(", ", ",").split(","))
 
 
 def render() -> None:
@@ -2241,7 +2240,7 @@ def render() -> None:
     else:
         col1, col2 = st.columns(2)
         start = str(col1.date_input("Start", date.today() - timedelta(days=7)))
-        end = str(col2.date_input("End", date.today()))
+        end = str(col2.date_input("End", date.today()) + timedelta(days=1))
 
     with get_connection(config.storage.db_path) as conn:
         summary = _summary_for_period(conn, start, end)
@@ -2280,7 +2279,7 @@ def render() -> None:
                 use_container_width=True,
             )
 
-        top = _top_costly_prompts(conn, start, end)
+        top = _top_costly_prompts(conn, start, end, config.privacy.show_prompts_in_ui)
         if not top.empty:
             st.subheader("Top Costly Prompts")
             st.dataframe(top, use_container_width=True)
@@ -2381,11 +2380,13 @@ def _list_sessions(conn) -> pd.DataFrame:
     )
 
 
-def _session_requests(conn, session_id: str) -> pd.DataFrame:
+def _session_requests(conn, session_id: str, show_prompts: bool) -> pd.DataFrame:
+    columns = """timestamp, request_id, project, model, input_tokens, output_tokens,
+                  cache_creation_input_tokens, cache_read_input_tokens, cost_usd"""
+    if show_prompts:
+        columns += ", prompt_text, response_text"
     rows = conn.execute(
-        """SELECT timestamp, request_id, project, model, input_tokens, output_tokens,
-                  cache_creation_input_tokens, cache_read_input_tokens, cost_usd,
-                  prompt_text, response_text
+        f"""SELECT {columns}
            FROM requests
            WHERE session_id = ?
            ORDER BY timestamp""",
@@ -2393,11 +2394,7 @@ def _session_requests(conn, session_id: str) -> pd.DataFrame:
     ).fetchall()
     return pd.DataFrame(
         rows,
-        columns=[
-            "timestamp", "request_id", "project", "model", "input_tokens", "output_tokens",
-            "cache_creation_input_tokens", "cache_read_input_tokens", "cost_usd",
-            "prompt_text", "response_text",
-        ],
+        columns=[c.strip() for c in columns.replace(", ", ",").split(",")],
     )
 
 
@@ -2409,10 +2406,10 @@ def render() -> None:
         st.dataframe(sessions, use_container_width=True)
         selected = st.selectbox("Session", sessions["session_id"].tolist())
         if selected:
-            requests_df = _session_requests(conn, selected)
+            requests_df = _session_requests(conn, selected, config.privacy.show_prompts_in_ui)
             st.dataframe(requests_df, use_container_width=True)
             search = st.text_input("Search prompts/responses")
-            if search:
+            if search and config.privacy.show_prompts_in_ui:
                 mask = (
                     requests_df["prompt_text"].str.contains(search, na=False, case=False)
                     | requests_df["response_text"].str.contains(search, na=False, case=False)
@@ -2448,7 +2445,7 @@ git commit -m "feat: implement remaining Streamlit UI pages"
 - Create: `tests/test_integration.py`
 
 **Interfaces:**
-- Produces: end-to-end test covering `init -> collect -> pricing -> cost -> ui`.
+- Produces: end-to-end test covering `init -> collect -> cost -> ui` (pricing is exercised separately to keep the smoke test deterministic).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2465,14 +2462,12 @@ from claude_meter.cli import main
 def test_full_flow(temp_home: Path, sample_project_jsonl: Path) -> None:
     runner = CliRunner()
     assert runner.invoke(main, ["init"]).exit_code == 0
-    assert runner.invoke(main, ["pricing"]).exit_code == 0
     result = runner.invoke(main, ["collect"])
     assert result.exit_code == 0
     assert "Inserted 1 new records" in result.output
     db_path = temp_home / ".claude-meter" / "data.db"
     assert db_path.exists()
 ```
-
 - [ ] **Step 2: Run test to verify it fails**
 
 Run:
