@@ -1,0 +1,16 @@
+# OpenCode / Sisyphus workspace metadata
+.omo/
+.sisyphus/
+
+# Nexus index
+.nexus/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+.venv/
+
+# Local data and config
+.claude-meter/
