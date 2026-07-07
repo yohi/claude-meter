@@ -298,11 +298,10 @@ ui:
 |---|---|---|
 | macOS | `~/.claude` | 現状の想定パス |
 | Linux | `~/.claude` | 現状の想定パス |
-| Windows | `%APPDATA%\Claude` または `%LOCALAPPDATA%\Claude` | 実際の配布版 Claude / Claude Code のデータ格納先を調査して確定する |
+| Windows | `%LOCALAPPDATA%\Claude` | Claude Desktop / Claude Code の実装に準拠。`%APPDATA%\Claude` ではない |
 
 - 設定ファイル `config.yaml` の `claude.projects_dir` / `claude.transcripts_dir` で上書き可能
 - 実装時は `pathlib` に加え、OS 別のデフォルト解決ロジックを用意し、存在するディレクトリを自動選択する
-- Windows パスは実機または公式ドキュメントで確認し、確定後に本設計書を更新する
 ## ローカル完結の担保
 
 - すべてのデータは `~/.claude-meter/` 以下に保存
