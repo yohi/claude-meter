@@ -1406,6 +1406,7 @@ def fetch_aws_bedrock_json() -> list[PricingRecord]:
             {
                 "input_price_per_1k": None,
                 "output_price_per_1k": None,
+                "cache_creation_price_per_1k": None,
                 "cache_read_price_per_1k": None,
             },
         )
@@ -1413,6 +1414,8 @@ def fetch_aws_bedrock_json() -> list[PricingRecord]:
             entry["input_price_per_1k"] = price
         elif "output" in usage_type.lower() or inference_type.lower() == "output tokens":
             entry["output_price_per_1k"] = price
+        elif "cache" in usage_type.lower() and "creation" in usage_type.lower():
+            entry["cache_creation_price_per_1k"] = price
         elif "cache" in usage_type.lower() and "read" in usage_type.lower():
             entry["cache_read_price_per_1k"] = price
 
@@ -1424,6 +1427,7 @@ def fetch_aws_bedrock_json() -> list[PricingRecord]:
                 source="aws_bedrock_json",
                 input_price_per_1k=prices["input_price_per_1k"],
                 output_price_per_1k=prices["output_price_per_1k"],
+                cache_creation_price_per_1k=prices["cache_creation_price_per_1k"],
                 cache_read_price_per_1k=prices["cache_read_price_per_1k"],
                 updated_at=now,
             )
