@@ -905,7 +905,7 @@ Create `src/claude_meter/collector.py`:
 import json
 import re
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from claude_meter.config import Config, default_claude_dir
@@ -974,6 +974,7 @@ def parse_incremental(config: Config) -> int:
             current_size = file_path.stat().st_size
             start_line = _read_sync_state(conn, file_path)
             with file_path.open("r", encoding="utf-8") as f:
+                line_no = start_line
                 for line_no, line in enumerate(f, start=1):
                     if line_no <= start_line:
                         continue
