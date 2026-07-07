@@ -922,14 +922,14 @@ def collect_files(config: Config) -> list[Path]:
     return sorted(base.rglob("*.jsonl"))
 
 
-def _read_sync_state(conn: sqlite3.Connection, file_path: Path) -> int:
+def _read_sync_state(conn: sqlite3.Connection, file_path: Path) -> tuple[int, int | None]:
     row = conn.execute(
         "SELECT last_size, last_line FROM sync_state WHERE file_path = ?",
         (str(file_path),),
     ).fetchone()
     if row is None:
-        return 0
-    return int(row["last_line"])
+        return 0, None
+    return int(row["last_line"]), row["last_size"]
 
 
 def _update_sync_state(conn: sqlite3.Connection, file_path: Path, size: int, line_no: int) -> None:
@@ -974,7 +974,9 @@ def parse_incremental(config: Config) -> int:
     with get_connection(config.storage.db_path) as conn:
         for file_path in files:
             current_size = file_path.stat().st_size
-            start_line = _read_sync_state(conn, file_path)
+            start_line, last_size = _read_sync_state(conn, file_path)
+            if last_size is not None and current_size < last_size:
+                start_line = 0
             with file_path.open("r", encoding="utf-8") as f:
                 line_no = start_line
                 for line_no, line in enumerate(f, start=1):
@@ -1698,9 +1700,9 @@ git commit -m "feat: add cost calculation and backfill for existing records"
 
 - [ ] **Step 1: Write the failing test**
 
-Create `tests/test_cli.py`:
-
 ```python
+from pathlib import Path
+
 from click.testing import CliRunner
 
 from claude_meter.cli import main
@@ -1737,6 +1739,9 @@ Create `src/claude_meter/cli.py`:
 
 ```python
 """Command-line interface for claude-meter."""
+
+import sys
+from pathlib import Path
 
 import click
 
@@ -1836,7 +1841,7 @@ Run:
 pytest tests/test_cli.py -v
 ```
 
-Expected: 2 passing tests. (`watch` import is intentionally resolved in the next task; to keep this task testable, create an empty `src/claude_meter/watcher.py` first.)
+Expected: 2 passing tests. (`watch` import is intentionally resolved in the next task; to keep this task testable, create a stub `src/claude_meter/watcher.py` with `def watch(config, poll_interval=5.0): pass` first.)
 
 - [ ] **Step 5: Commit**
 
