@@ -854,7 +854,7 @@ Create `tests/test_collector.py`:
 from pathlib import Path
 
 from claude_meter.collector import collect_files, derive_project, parse_incremental
-from claude_meter.config import Config
+from claude_meter.config import Config, load_config
 
 
 def test_collect_files_finds_jsonl(temp_home: Path, sample_project_jsonl: Path) -> None:
@@ -940,7 +940,7 @@ def _update_sync_state(conn: sqlite3.Connection, file_path: Path, size: int, lin
                last_size=excluded.last_size,
                last_line=excluded.last_line,
                last_modified=excluded.last_modified""",
-        (str(file_path), size, line_no, datetime.utcnow().isoformat()),
+        (str(file_path), size, line_no, datetime.now(timezone.utc).isoformat()),
     )
 
 
@@ -1007,7 +1007,7 @@ def parse_incremental(config: Config) -> int:
                     )
                     _insert_usage(conn, rec)
                     inserted += 1
-            _update_sync_state(conn, file_path, current_size, line_no if "line_no" in dir() else start_line)
+            _update_sync_state(conn, file_path, current_size, line_no)
         conn.commit()
     return inserted
 
@@ -1140,7 +1140,7 @@ def _load_transcripts(config: Config) -> dict[tuple[str, str | None], tuple[str,
                     pairs[key] = (content, existing[1], ts)
                 elif msg_type == "assistant":
                     existing = pairs.get(key, ("", "", ts))
-                    pairs[key] = (existing[0], content, ts)
+                    pairs[key] = (existing[0], content, existing[2])  # user_ts を保持
     return pairs
 
 
@@ -1298,6 +1298,7 @@ Create `src/claude_meter/pricing.py`:
 
 import json
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 
 import requests
@@ -1378,23 +1379,67 @@ def fetch_aws_bedrock_json() -> list[PricingRecord]:
         data = resp.json()
     except Exception:
         return []
+    products = data.get("products", {})
+    terms = data.get("terms", {}).get("OnDemand", {})
     records: list[PricingRecord] = []
     now = datetime.now(timezone.utc)
-    for sku, attrs in data.get("products", {}).items():
-        if attrs.get("productFamily") != "Claude":
+    grouped: dict[tuple[str, str], dict[str, Decimal | None]] = {}
+    for sku, attrs in products.items():
+        if attrs.get("productFamily") != "Amazon Bedrock":
             continue
-        model = attrs.get("attributes", {}).get("modelId", attrs.get("sku"))
-        region = attrs.get("attributes", {}).get("regionCode", "us-east-1")
+        attributes = attrs.get("attributes", {})
+        if attributes.get("provider", "").lower() != "anthropic":
+            continue
+        model = attributes.get("modelId", attributes.get("model", sku))
+        region = attributes.get("regionCode", "us-east-1")
+        usage_type = attributes.get("usagetype", "")
+        inference_type = attributes.get("inferenceType", "")
+        price = _extract_aws_sku_price(terms, sku)
+        if price is None:
+            continue
+        key = (model, region)
+        entry = grouped.setdefault(
+            key,
+            {
+                "input_price_per_1k": None,
+                "output_price_per_1k": None,
+                "cache_read_price_per_1k": None,
+            },
+        )
+        if "input" in usage_type.lower() or inference_type.lower() == "input tokens":
+            entry["input_price_per_1k"] = price
+        elif "output" in usage_type.lower() or inference_type.lower() == "output tokens":
+            entry["output_price_per_1k"] = price
+        elif "cache" in usage_type.lower() and "read" in usage_type.lower():
+            entry["cache_read_price_per_1k"] = price
+
+    for (model, region), prices in grouped.items():
         records.append(
             PricingRecord(
                 model=model,
                 region=region,
                 source="aws_bedrock_json",
+                input_price_per_1k=prices["input_price_per_1k"],
+                output_price_per_1k=prices["output_price_per_1k"],
+                cache_read_price_per_1k=prices["cache_read_price_per_1k"],
                 updated_at=now,
             )
         )
-    # On terms omitted for MVP; fill from models.dev or fallback later.
     return records
+
+
+def _extract_aws_sku_price(terms: dict, sku: str) -> Decimal | None:
+    sku_terms = terms.get(sku, {})
+    for term in sku_terms.values():
+        for dim in term.get("priceDimensions", {}).values():
+            price = dim.get("pricePerUnit", {}).get("USD")
+            if price is not None:
+                try:
+                    return Decimal(str(price))
+                except Exception:
+                    return None
+    return None
+
 
 
 def fetch_models_dev() -> list[PricingRecord]:
@@ -1593,7 +1638,7 @@ def fill_missing_costs(config: Config, region: str | None = None) -> int:
         rows = cursor.fetchall()
         for row in rows:
             record = UsageRecord(
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(timezone.utc),
                 session_id="",
                 request_id=None,
                 model=row["model"],
@@ -1863,6 +1908,8 @@ Create `src/claude_meter/watcher.py`:
 """Filesystem watcher for live JSONL ingestion."""
 
 import time
+
+from pathlib import Path
 
 from claude_meter.config import Config
 from claude_meter.cost import fill_missing_costs
