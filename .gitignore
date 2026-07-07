@@ -9,7 +9,8 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
-.env
+.env*
+!.env.example
 .venv/
 
 # Local data and config
