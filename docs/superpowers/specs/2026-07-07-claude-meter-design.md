@@ -114,7 +114,8 @@ CREATE TABLE requests (
     prompt_text TEXT,
     response_text TEXT,
     source_file TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (session_id, request_id)
 );
 
 CREATE INDEX idx_requests_timestamp ON requests(timestamp);
@@ -127,8 +128,9 @@ CREATE INDEX idx_requests_session ON requests(session_id);
 
 ```sql
 CREATE TABLE pricing (
-    model TEXT PRIMARY KEY,
-    region TEXT,
+    model TEXT NOT NULL,
+    region TEXT NOT NULL,
+    PRIMARY KEY (model, region),
     input_price_per_1k REAL,
     output_price_per_1k REAL,
     cache_creation_price_per_1k REAL,
@@ -164,9 +166,10 @@ CREATE TABLE daily_summary (
     total_cache_read_input_tokens INTEGER,
     total_cost_usd REAL,
     request_count INTEGER,
-    avg_response_time_ms INTEGER,
+    avg_response_time_ms REAL,
     PRIMARY KEY (date, project, model)
 );
+```
 
 ## Bedrock 単価取得
 
@@ -289,6 +292,17 @@ ui:
 - パスは `pathlib` を使用し、OS 依存を排除
 - Windows/macOS/Ubuntu すべてで `claude-meter ui` コマンドで Streamlit を起動
 
+### OS 別 Claude データディレクトリの解決
+
+| OS | デフォルトパス | 備考 |
+|---|---|---|
+| macOS | `~/.claude` | 現状の想定パス |
+| Linux | `~/.claude` | 現状の想定パス |
+| Windows | `%APPDATA%\Claude` または `%LOCALAPPDATA%\Claude` | 実際の配布版 Claude / Claude Code のデータ格納先を調査して確定する |
+
+- 設定ファイル `config.yaml` の `claude.projects_dir` / `claude.transcripts_dir` で上書き可能
+- 実装時は `pathlib` に加え、OS 別のデフォルト解決ロジックを用意し、存在するディレクトリを自動選択する
+- Windows パスは実機または公式ドキュメントで確認し、確定後に本設計書を更新する
 ## ローカル完結の担保
 
 - すべてのデータは `~/.claude-meter/` 以下に保存
