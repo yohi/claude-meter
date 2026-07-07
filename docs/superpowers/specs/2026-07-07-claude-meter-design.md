@@ -32,6 +32,8 @@
 |---|---|---|
 | 入力トークン | `~/.claude/projects/*/*.jsonl` の `assistant.message.usage.input_tokens` | MUST |
 | 出力トークン | 同上 `output_tokens` | MUST |
+| キャッシュ作成入力トークン | 同上 `cache_creation_input_tokens` | MUST |
+| キャッシュ読込入力トークン | 同上 `cache_read_input_tokens` | MUST |
 | 可視化 | Streamlit + SQLite によるローカル Web UI | MUST |
 | マルチ OS 対応 | Python 3.10+、Windows/macOS/Ubuntu で動作 | MUST |
 | 最新 Bedrock 単価取得 | AWS pricing JSON → `models.dev` → 内蔵フォールバック | MUST |
@@ -105,6 +107,7 @@ CREATE TABLE requests (
     project TEXT,
     git_repository TEXT,
     model TEXT NOT NULL,
+    region TEXT,
     input_tokens INTEGER,
     output_tokens INTEGER,
     cache_creation_input_tokens INTEGER,
@@ -125,6 +128,11 @@ CREATE INDEX idx_requests_session ON requests(session_id);
 ```
 
 #### `pricing`
+
+リクエストの `region` は ClaudeCode の JSONL には含まれないため、
+コスト計算時に使用する region は `config.yaml` の `claude.region` で指定する。
+未指定時は `us-east-1` を使用し、`requests.region` 列にも保存する。
+`pricing` テーブルは `(model, region)` の複合キーであり、region ごとに単価を保持する。
 
 ```sql
 CREATE TABLE pricing (
@@ -198,10 +206,10 @@ CREATE TABLE daily_summary (
 ### コスト計算ロジック
 
 ```text
-input_cost  = input_tokens × input_price_per_1k_tokens / 1000
-output_cost = output_tokens × output_price_per_1k_tokens / 1000
-cache_cost  = cache_creation_input_tokens × cache_creation_price / 1000
-            + cache_read_input_tokens × cache_read_price / 1000
+input_cost  = input_tokens × input_price_per_1k / 1000
+output_cost = output_tokens × output_price_per_1k / 1000
+cache_cost  = cache_creation_input_tokens × cache_creation_price_per_1k / 1000
+            + cache_read_input_tokens × cache_read_price_per_1k / 1000
 total_cost  = input_cost + output_cost + cache_cost
 ```
 
@@ -264,8 +272,9 @@ ClaudeCode 内部名（`claude-haiku-4-5-20251001`）と Bedrock ARN 形式（`a
 
 ```yaml
 claude:
-  projects_dir: "~/.claude/projects"
-  transcripts_dir: "~/.claude/transcripts"
+  projects_dir: null        # 未指定時は OS 別デフォルトを自動解決
+  transcripts_dir: null     # macOS/Linux: ~/.claude/...  Windows: %LOCALAPPDATA%\Claude\...
+  region: "us-east-1"        # Bedrock 単価取得・コスト計算に使用するリージョン
 
 storage:
   db_path: "~/.claude-meter/data.db"
