@@ -1,6 +1,7 @@
 """SQLite database schema and connection helpers."""
 
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 SCHEMA_SQL = """
@@ -50,6 +51,13 @@ CREATE TABLE IF NOT EXISTS sync_state (
     last_modified DATETIME
 );
 
+-- project is part of the composite PRIMARY KEY and MUST remain NOT NULL.
+-- requests.project is nullable, so any aggregation pipeline that writes into
+-- daily_summary MUST normalize NULL project values (e.g. COALESCE(project, ''))
+-- before insert. Do NOT relax this to `project TEXT` (nullable): SQLite's
+-- PRIMARY KEY does not imply NOT NULL for non-rowid/composite keys, and its
+-- UNIQUE constraint treats multiple NULLs as distinct, which would silently
+-- allow duplicate (date, NULL, model) rows and break the summary's uniqueness.
 CREATE TABLE IF NOT EXISTS daily_summary (
     date TEXT NOT NULL,
     project TEXT NOT NULL,
@@ -71,10 +79,12 @@ def get_connection(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 5000")
     return conn
 
 
 def init_db(db_path: Path) -> None:
-    with get_connection(db_path) as conn:
+    with closing(get_connection(db_path)) as conn:
         conn.executescript(SCHEMA_SQL)
         conn.commit()
