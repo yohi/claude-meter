@@ -72,7 +72,7 @@ def derive_project(cwd: str) -> tuple[str | None, str | None]:
     path = Path(cwd)
     project = path.name or None
     repo: str | None = None
-    for parent in [path] + list(path.parents):
+    for parent in (path, *path.parents):
         git_config = parent / ".git" / "config"
         if git_config.exists():
             try:
@@ -165,11 +165,18 @@ def parse_incremental(config: Config) -> int:
     inserted = 0
     with get_connection(config.storage.db_path) as conn:
         for file_path in files:
-            current_size = file_path.stat().st_size
+            try:
+                current_size = file_path.stat().st_size
+            except OSError:
+                continue
             start_line, last_size = _read_sync_state(conn, file_path)
             if last_size is not None and current_size < last_size:
                 start_line = 0
-            with file_path.open("r", encoding="utf-8") as f:
+            try:
+                fh = file_path.open("r", encoding="utf-8")
+            except OSError:
+                continue
+            with fh as f:
                 line_no = start_line
                 for line_no, line in enumerate(f, start=1):
                     if line_no <= start_line:

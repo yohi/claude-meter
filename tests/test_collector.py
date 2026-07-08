@@ -156,3 +156,81 @@ def test_response_time_computed_when_request_id_missing(temp_home: Path) -> None
         assert row["prompt_text"] == "hello"
         assert row["response_text"] == "world"
         assert row["response_time_ms"] == 1000
+
+
+def test_missing_request_id_uses_synthetic_id(temp_home: Path) -> None:
+    """requestId 欠損時、DB の request_id が missing-{ファイル名}-{行番号} 形式になること。"""
+    from contextlib import closing
+    from claude_meter.db import get_connection
+
+    config = load_config()
+    init_db(config.storage.db_path)
+    projects = temp_home / ".claude" / "projects" / "demo"
+    projects.mkdir(parents=True)
+    rec_with_id = {
+        "type": "assistant",
+        "timestamp": "2026-07-08T10:00:00Z",
+        "cwd": "/x",
+        "sessionId": "s-syn",
+        "requestId": "req-present",
+        "message": {"model": "m", "usage": {"input_tokens": 1}},
+    }
+    rec_missing = {
+        "type": "assistant",
+        "timestamp": "2026-07-08T10:00:01Z",
+        "cwd": "/x",
+        "sessionId": "s-syn",
+        # requestId is intentionally absent -> synthesized as missing-log.jsonl-2
+        "message": {"model": "m", "usage": {"input_tokens": 2}},
+    }
+    # line 1 = rec_with_id, line 2 = rec_missing (line_no is 1-based)
+    (projects / "log.jsonl").write_text(
+        json.dumps(rec_with_id) + "\n" + json.dumps(rec_missing) + "\n",
+        encoding="utf-8",
+    )
+
+    inserted = parse_incremental(config)
+    assert inserted == 2
+    with closing(get_connection(config.storage.db_path)) as conn:
+        row = conn.execute(
+            "SELECT request_id FROM requests WHERE session_id = 's-syn' AND input_tokens = 2"
+        ).fetchone()
+        assert row["request_id"] == "missing-log.jsonl-2"
+
+
+def test_parse_incremental_survives_unreadable_file(temp_home: Path) -> None:
+    """処理対象の .jsonl が open 失敗しても例外を出さず他ファイルは挿入され続けること。"""
+    from contextlib import closing
+    from claude_meter.db import get_connection
+
+    config = load_config()
+    init_db(config.storage.db_path)
+    projects = temp_home / ".claude" / "projects" / "demo"
+    projects.mkdir(parents=True)
+    good = {
+        "type": "assistant",
+        "timestamp": "2026-07-08T10:00:00Z",
+        "cwd": "/x",
+        "sessionId": "s-good",
+        "requestId": "req-good",
+        "message": {"model": "m", "usage": {"input_tokens": 7}},
+    }
+    (projects / "good.jsonl").write_text(json.dumps(good) + "\n", encoding="utf-8")
+    # bad.jsonl is created as a directory so open("r") raises OSError (IsADirectoryError).
+    # collect_files' rglob('*.jsonl') still lists it; parse_incremental must skip it.
+    (projects / "bad.jsonl").mkdir()
+
+    inserted = parse_incremental(config)  # must NOT raise
+    assert inserted == 1  # only good.jsonl inserted; bad.jsonl skipped
+    with closing(get_connection(config.storage.db_path)) as conn:
+        row = conn.execute(
+            "SELECT request_id FROM requests WHERE session_id = 's-good'"
+        ).fetchone()
+        assert row is not None
+        assert row["request_id"] == "req-good"
+        # the skipped file must not leave a partial sync_state entry
+        bad_state = conn.execute(
+            "SELECT 1 FROM sync_state WHERE file_path = ?",
+            (str(projects / "bad.jsonl"),),
+        ).fetchone()
+        assert bad_state is None
