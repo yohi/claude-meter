@@ -5,12 +5,10 @@ from typing import Any
 
 from claude_meter.config import Config, default_claude_dir
 from claude_meter.cost import fill_missing_costs
-from claude_meter.db import init_db
 
 
 def _collect_once(config: Config) -> int:
     from claude_meter.collector import parse_incremental
-    init_db(config.storage.db_path)
     inserted = parse_incremental(config)
     if inserted:
         fill_missing_costs(config)
