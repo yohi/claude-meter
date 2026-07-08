@@ -1,18 +1,30 @@
 """Filesystem watcher for live JSONL ingestion."""
 
+import logging
 import time
 from typing import Any
 
 from claude_meter.config import Config, default_claude_dir
 from claude_meter.cost import fill_missing_costs
 
+logger = logging.getLogger(__name__)
+
 
 def _collect_once(config: Config) -> int:
     from claude_meter.collector import parse_incremental
+
     inserted = parse_incremental(config)
     if inserted:
         fill_missing_costs(config)
     return inserted
+
+
+def _safe_collect_once(config: Config) -> int:
+    try:
+        return _collect_once(config)
+    except Exception:
+        logger.exception("Failed to collect ClaudeCode logs")
+        return 0
 
 
 def watch(config: Config, poll_interval: float = 5.0) -> None:
@@ -29,7 +41,7 @@ def watch(config: Config, poll_interval: float = 5.0) -> None:
 
         def on_event(event: Any) -> None:
             if event.src_path.endswith(".jsonl"):
-                _collect_once(config)
+                _safe_collect_once(config)
             original_on_any_event(event)
 
         handler.on_any_event = on_event  # type: ignore[method-assign]
@@ -51,5 +63,5 @@ def watch(config: Config, poll_interval: float = 5.0) -> None:
             observer.join()
     else:
         while True:
-            _collect_once(config)
+            _safe_collect_once(config)
             time.sleep(poll_interval)
