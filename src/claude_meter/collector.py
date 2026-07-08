@@ -75,7 +75,10 @@ def derive_project(cwd: str) -> tuple[str | None, str | None]:
     for parent in [path] + list(path.parents):
         git_config = parent / ".git" / "config"
         if git_config.exists():
-            text = git_config.read_text(encoding="utf-8")
+            try:
+                text = git_config.read_text(encoding="utf-8")
+            except OSError:
+                break
             m = re.search(r"url\s*=\s*(.+)", text)
             if m:
                 raw_url = m.group(1).strip()
@@ -101,7 +104,11 @@ def _load_transcripts(config: Config) -> dict[tuple[str, str | None], tuple[str,
         return {}
     pairs: dict[tuple[str, str | None], tuple[str, str, datetime]] = {}
     for file_path in sorted(base.glob("*.jsonl")):
-        with file_path.open("r", encoding="utf-8") as f:
+        try:
+            fh = file_path.open("r", encoding="utf-8")
+        except OSError:
+            continue
+        with fh as f:
             for line in f:
                 line = line.strip()
                 if not line:
