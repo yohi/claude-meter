@@ -75,9 +75,7 @@ def load_config(path: Path | None = None) -> Config:
     if config_path.exists():
         raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         return Config.model_validate(raw or {})
-    config = Config()
-    save_config(config, config_path)
-    return config
+    return Config()
 
 
 def save_config(config: Config, path: Path | None = None) -> None:
