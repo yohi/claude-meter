@@ -118,3 +118,87 @@ def test_fill_missing_costs_does_not_null_existing_cost_when_region_missing(
         # region は埋まるが、既存の cost_usd は消えない。
         assert row["region"] == "us-east-1"
         assert row["cost_usd"] == pytest.approx(0.0105)
+
+
+def test_fill_missing_costs_updates_cost_when_region_already_set(
+    tmp_path: Path,
+) -> None:
+    """region が既に設定済みで cost_usd のみ NULL の行は、cost のみ更新され
+    updated に数えられる（elif cost is not None ブランチ）。"""
+    from claude_meter.config import Config
+    from claude_meter.cost import fill_missing_costs
+    from claude_meter.db import get_connection, init_db
+    from claude_meter.pricing import _save_cached_pricing, load_fallback_pricing
+
+    config = Config(storage={"db_path": str(tmp_path / "data.db")})
+    init_db(config.storage.db_path)
+    _save_cached_pricing(config, load_fallback_pricing())
+
+    with get_connection(config.storage.db_path) as conn:
+        conn.execute(
+            "INSERT INTO requests (timestamp, session_id, request_id, model, "
+            "region, input_tokens, output_tokens) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                "2026-07-08T10:00:00Z",
+                "s",
+                "r",
+                "claude-sonnet-4-5-20260701",
+                "us-east-1",
+                1000,
+                500,
+            ),
+        )
+        conn.commit()
+
+    updated = fill_missing_costs(config)
+    assert updated == 1
+
+    with get_connection(config.storage.db_path) as conn:
+        cursor = conn.execute("SELECT cost_usd, region FROM requests WHERE id = 1")
+        row = cursor.fetchone()
+        assert row is not None
+        # Cost = (1000*0.003 + 500*0.015) / 1000 = 0.0105
+        assert row["cost_usd"] == pytest.approx(0.0105)
+        # region は既存の値のまま変わらない。
+        assert row["region"] == "us-east-1"
+
+
+def test_fill_missing_costs_skips_row_when_region_set_and_no_pricing(
+    tmp_path: Path,
+) -> None:
+    """region が既に設定済みで cost_usd が NULL だが、価格情報が無く cost が
+    再計算できない行は更新もカウントもされない（書き込む意味がないためスキップ）。"""
+    from claude_meter.config import Config
+    from claude_meter.cost import fill_missing_costs
+    from claude_meter.db import get_connection, init_db
+    from claude_meter.pricing import _save_cached_pricing, load_fallback_pricing
+
+    config = Config(storage={"db_path": str(tmp_path / "data.db")})
+    init_db(config.storage.db_path)
+    _save_cached_pricing(config, load_fallback_pricing())
+
+    with get_connection(config.storage.db_path) as conn:
+        conn.execute(
+            "INSERT INTO requests (timestamp, session_id, request_id, model, "
+            "region, input_tokens, output_tokens) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                "2026-07-08T10:00:00Z",
+                "s",
+                "r",
+                "unknown-model",
+                "us-east-1",
+                1000,
+                500,
+            ),
+        )
+        conn.commit()
+
+    updated = fill_missing_costs(config)
+    assert updated == 0
+
+    with get_connection(config.storage.db_path) as conn:
+        cursor = conn.execute("SELECT cost_usd, region FROM requests WHERE id = 1")
+        row = cursor.fetchone()
+        assert row is not None
+        assert row["cost_usd"] is None
+        assert row["region"] == "us-east-1"

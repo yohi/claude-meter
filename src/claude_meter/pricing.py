@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -86,25 +87,31 @@ def _load_cached_pricing(config: Config) -> list[PricingRecord] | None:
     try:
         meta_data = yaml.safe_load(meta.read_text(encoding="utf-8"))
         updated = datetime.fromisoformat(meta_data["updated_at"])
+        ttl = timedelta(hours=config.pricing.cache_ttl_hours)
+        if datetime.now(timezone.utc) - updated > ttl:
+            return None
+        data = json.loads(cache.read_text(encoding="utf-8"))
+        return [PricingRecord.model_validate(r) for r in data]
     except Exception:
         return None
-    ttl = timedelta(hours=config.pricing.cache_ttl_hours)
-    if datetime.now(timezone.utc) - updated > ttl:
-        return None
-    data = json.loads(cache.read_text(encoding="utf-8"))
-    return [PricingRecord.model_validate(r) for r in data]
 
 
 def _save_cached_pricing(config: Config, records: list[PricingRecord]) -> None:
     cache = _cache_path(config)
     meta = _cache_meta_path(config)
     cache.parent.mkdir(parents=True, exist_ok=True)
-    cache.write_text(
+    # tmpファイルに書いてから os.replace でアトミックに差し替える。中途のクラッシュにより
+    # 半端な JSON/YAML が残らないようにする。
+    cache_tmp = cache.with_name(cache.name + ".tmp")
+    meta_tmp = meta.with_name(meta.name + ".tmp")
+    cache_tmp.write_text(
         json.dumps([r.model_dump(mode="json") for r in records], indent=2),
         encoding="utf-8",
     )
     now = datetime.now(timezone.utc).isoformat()
-    meta.write_text(yaml.safe_dump({"updated_at": now}), encoding="utf-8")
+    meta_tmp.write_text(yaml.safe_dump({"updated_at": now}), encoding="utf-8")
+    os.replace(cache_tmp, cache)
+    os.replace(meta_tmp, meta)
 
 
 def upsert_pricing_table(config: Config, records: list[PricingRecord]) -> None:
@@ -193,14 +200,16 @@ def fetch_aws_bedrock_json() -> list[PricingRecord]:
                 "cache_read_price_per_1k": None,
             },
         )
-        if "input" in inference_type or "input" in usage_type:
-            entry["input_price_per_1k"] = price
-        elif "output" in inference_type or "output" in usage_type:
-            entry["output_price_per_1k"] = price
-        elif "cache" in usage_type and ("write" in usage_type or "creation" in usage_type):
+        # cache系の usage_type（例: "CacheWriteInputTokens", "CacheReadInputTokens"）には
+        # "input" という部分文字列も含まれるため、cache判定を先に行い誤分類を防ぐ。
+        if "cache" in usage_type and ("write" in usage_type or "creation" in usage_type):
             entry["cache_creation_price_per_1k"] = price
         elif "cache" in usage_type and "read" in usage_type:
             entry["cache_read_price_per_1k"] = price
+        elif "input" in inference_type or "input" in usage_type:
+            entry["input_price_per_1k"] = price
+        elif "output" in inference_type or "output" in usage_type:
+            entry["output_price_per_1k"] = price
 
     records: list[PricingRecord] = []
     for (model, region), prices in grouped.items():
@@ -263,6 +272,15 @@ _FETCHERS_BY_SOURCE: dict[str, Callable[[], list[PricingRecord]]] = {
 }
 
 
+def _has_arn_style_keys(records: list[PricingRecord]) -> bool:
+    """Return True if at least one record's model key looks like a Bedrock ARN-style
+    id (e.g. 'anthropic.claude-...' or a region-prefixed variant such as
+    'eu.anthropic.claude-...'). This is the key shape model_to_arn_keys()/
+    calculate_cost() expect. Sources like aws_bedrock_json can return human-readable
+    model names (e.g. 'Claude 2.1') that never match those lookups."""
+    return any("anthropic.claude" in r.model.lower() for r in records)
+
+
 def update_pricing(config: Config, force: bool = False) -> list[PricingRecord]:
     if not force:
         cached = _load_cached_pricing(config)
@@ -270,13 +288,17 @@ def update_pricing(config: Config, force: bool = False) -> list[PricingRecord]:
             upsert_pricing_table(config, cached)
             return cached
     # Fetcher order follows config: primary_source then fallback_source. Unknown
-    # source names are ignored; the bundled JSON is the final offline fallback.
+    # source names are logged and skipped; a source's records are only accepted
+    # when they contain ARN-style keys that calculate_cost() can actually look up
+    # (e.g. aws_bedrock_json often returns human-readable model names that never
+    # match). The bundled JSON is the final offline fallback.
     for name in (config.pricing.primary_source, config.pricing.fallback_source):
         fetcher = _FETCHERS_BY_SOURCE.get(name)
         if fetcher is None:
+            logger.warning("Unknown pricing source %r in config; skipping", name)
             continue
         records = fetcher()
-        if records:
+        if records and _has_arn_style_keys(records):
             _save_cached_pricing(config, records)
             upsert_pricing_table(config, records)
             return records
