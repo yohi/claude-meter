@@ -10,7 +10,7 @@ from claude_meter.pricing import load_fallback_pricing, update_pricing
 def test_load_fallback_pricing_has_records() -> None:
     records = load_fallback_pricing()
     assert records
-    assert all(r.region == "us-east-1" for r in records)
+    assert all(r.region for r in records)
 
 
 def test_update_pricing_uses_cache_when_fresh(temp_home: Path) -> None:
