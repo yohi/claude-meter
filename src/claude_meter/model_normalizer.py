@@ -1,13 +1,12 @@
 """Normalize ClaudeCode internal model names to Bedrock ARN-style keys."""
 
 import json
-from pathlib import Path
-
-_BUILT_IN_PATH = Path(__file__).with_name("pricing_fallback.json")
+from importlib import resources
 
 
 def _load_mapping() -> dict[str, list[str]]:
-    data = json.loads(_BUILT_IN_PATH.read_text(encoding="utf-8"))
+    resource = resources.files("claude_meter").joinpath("pricing_fallback.json")
+    data = json.loads(resource.read_text(encoding="utf-8"))
     return {
         name: info["arn_keys"]
         for name, info in data.get("models", {}).items()
