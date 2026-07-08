@@ -51,6 +51,13 @@ CREATE TABLE IF NOT EXISTS sync_state (
     last_modified DATETIME
 );
 
+-- project is part of the composite PRIMARY KEY and MUST remain NOT NULL.
+-- requests.project is nullable, so any aggregation pipeline that writes into
+-- daily_summary MUST normalize NULL project values (e.g. COALESCE(project, ''))
+-- before insert. Do NOT relax this to `project TEXT` (nullable): SQLite's
+-- PRIMARY KEY does not imply NOT NULL for non-rowid/composite keys, and its
+-- UNIQUE constraint treats multiple NULLs as distinct, which would silently
+-- allow duplicate (date, NULL, model) rows and break the summary's uniqueness.
 CREATE TABLE IF NOT EXISTS daily_summary (
     date TEXT NOT NULL,
     project TEXT NOT NULL,
