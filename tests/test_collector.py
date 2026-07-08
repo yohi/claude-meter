@@ -49,6 +49,7 @@ def test_response_time_computed_from_transcript(temp_home: Path, sample_project_
 
 
 def test_collect_survives_list_content_and_missing_timestamp(temp_home: Path) -> None:
+    from contextlib import closing
     from claude_meter.db import get_connection
 
     config = load_config()
@@ -100,9 +101,9 @@ def test_collect_survives_list_content_and_missing_timestamp(temp_home: Path) ->
 
     inserted = parse_incremental(config)  # must NOT raise
     assert inserted == 1  # rec_a inserted; rec_b (no timestamp) skipped
-    conn = get_connection(config.storage.db_path)
-    row = conn.execute(
-        "SELECT prompt_text, response_text FROM requests WHERE request_id = 'req-A'"
-    ).fetchone()
-    assert row["prompt_text"] == "hello world"
-    assert row["response_text"] == "hi there"
+    with closing(get_connection(config.storage.db_path)) as conn:
+        row = conn.execute(
+            "SELECT prompt_text, response_text FROM requests WHERE request_id = 'req-A'"
+        ).fetchone()
+        assert row["prompt_text"] == "hello world"
+        assert row["response_text"] == "hi there"
