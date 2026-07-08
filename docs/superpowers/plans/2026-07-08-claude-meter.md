@@ -842,8 +842,8 @@ git commit -m "feat: add model name normalizer and bundled fallback mapping"
 **Interfaces:**
 - Produces:
   - `def collect_files(config: Config) -> list[Path]`
-  - `def parse_incremental(config: Config, db_path: Path) -> int`  # returns number of new records inserted
-  - `def _derive_project(cwd: str, source_file: Path) -> tuple[str | None, str | None]`
+  - `def parse_incremental(config: Config) -> int`  # returns number of new records inserted; uses config.storage.db_path
+  - `def derive_project(cwd: str) -> tuple[str | None, str | None]`
 - Consumes: `Config`, `UsageRecord`, `db.get_connection`, `model_normalizer.normalize_model_name`.
 
 - [ ] **Step 1: Write the failing test**
@@ -855,6 +855,7 @@ from pathlib import Path
 
 from claude_meter.collector import collect_files, derive_project, parse_incremental
 from claude_meter.config import Config, load_config
+from claude_meter.db import init_db
 
 
 def test_collect_files_finds_jsonl(temp_home: Path, sample_project_jsonl: Path) -> None:
@@ -865,6 +866,7 @@ def test_collect_files_finds_jsonl(temp_home: Path, sample_project_jsonl: Path) 
 
 def test_parse_incremental_inserts_record(temp_home: Path, sample_project_jsonl: Path) -> None:
     config = load_config()
+    init_db(config.storage.db_path)
     inserted = parse_incremental(config)
     assert inserted == 1
     # second run is idempotent
