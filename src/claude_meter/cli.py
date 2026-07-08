@@ -2,6 +2,9 @@
 
 from pathlib import Path
 
+import subprocess
+import sys
+
 import click
 
 from claude_meter.config import Config, load_config, resolve_config_path
@@ -71,20 +74,22 @@ def ui(port: int | None, host: str | None) -> None:
     config = load_config()
     ui_port = port or config.ui.port
     ui_host = host or config.ui.host
-    import streamlit.web.cli as stcli
-    import sys
-    sys.argv = [
-        "streamlit",
-        "run",
-        str(Path(__file__).resolve().parent / "ui" / "app.py"),
-        "--server.port",
-        str(ui_port),
-        "--server.address",
-        ui_host,
-        "--browser.gatherUsageStats",
-        "false",
-    ]
-    stcli.main()
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "streamlit",
+            "run",
+            str(Path(__file__).resolve().parent / "ui" / "app.py"),
+            "--server.port",
+            str(ui_port),
+            "--server.address",
+            ui_host,
+            "--browser.gatherUsageStats",
+            "false",
+        ],
+        check=True,
+    )
 
 
 @main.command(name="watch")
