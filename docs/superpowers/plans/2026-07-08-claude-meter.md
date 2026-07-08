@@ -1,12 +1,14 @@
 # claude-meter Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+>
+> **Git safety:** Commit steps are optional checkpoints for human-approved execution. Do not run `git commit` unless the user explicitly authorizes committing.
 
 **Goal:** Build a local-only Python tool (`claude-meter`) that parses ClaudeCode JSONL usage logs, estimates AWS Bedrock costs from cached pricing, stores everything in SQLite, and exposes the data through a Streamlit Web UI and a small CLI.
 
-**Architecture:** A headless `Collector` incrementally parses `~/.claude/projects/*/*.jsonl` and `~/.claude/transcripts/*.jsonl` into a normalized `requests` table; a `Pricing` module keeps per-region per-model prices fresh from AWS / models.dev / built-in fallback; a `Streamlit` multi-page app visualizes aggregated usage; and a `CLI` (Click/Typer) wires initialization, one-shot collection, filesystem watch, UI launch, and pricing refresh together. All state lives under `~/.claude-meter/`.
+**Architecture:** A headless `Collector` incrementally parses `~/.claude/projects/*/*.jsonl` and `~/.claude/transcripts/*.jsonl` into a normalized `requests` table, using `~/.claude/history.jsonl` as an optional project-association hint; a `Pricing` module keeps per-region per-model prices fresh from AWS / models.dev / built-in fallback and persists them to both JSON cache and the SQLite `pricing` table; a `Streamlit` multi-page app visualizes aggregated usage; and a `CLI` (Click/Typer) wires initialization, one-shot collection, filesystem watch, UI launch, and pricing refresh together. All state lives under `~/.claude-meter/`.
 
-**Tech Stack:** Python 3.10+, SQLite, Streamlit, watchdog, requests, pydantic, Altair, pytest.
+**Tech Stack:** Python 3.10+, SQLite, Streamlit, watchdog, requests, pydantic, Altair / Plotly, pytest.
 
 ## Global Constraints
 
@@ -15,7 +17,9 @@
 - Default region for cost calculation and `requests.region` is `us-east-1`, overridable in `~/.claude-meter/config.yaml` via `claude.region`.
 - Multi-OS path resolution: macOS/Linux default to `~/.claude`; Windows defaults to `%LOCALAPPDATA%\Claude`; overridable via `claude.projects_dir` and `claude.transcripts_dir`.
 - Database path default: `~/.claude-meter/data.db`; config default: `~/.claude-meter/config.yaml`; pricing cache default: `~/.claude-meter/pricing.json`.
-- `requests` uniqueness is `(session_id, request_id)`.
+- `requests` uniqueness is `(session_id, request_id)`. `request_id` remains nullable to match the design schema; rows without `requestId` are inserted with `NULL` and rely on `sync_state` for normal incremental idempotence.
+- `~/.claude/history.jsonl` is an optional auxiliary source for project display names and path association; missing or malformed history data must not block usage collection.
+- Pricing refresh must update both `~/.claude-meter/pricing.json` and the SQLite `pricing` table.
 - Unknown models result in `cost_usd = NULL` and display as "Unknown model" in the UI.
 - Prompt storage is configurable via `privacy.store_prompts` (default `true`) and visibility via `privacy.show_prompts_in_ui` (default `true`).
 - Pricing cache TTL is 24 hours by default, configurable via `pricing.cache_ttl_hours`.
@@ -102,6 +106,7 @@ dependencies = [
     "pydantic-settings>=2.2",
     "pyyaml>=6.0",
     "altair>=5.3",
+    "plotly>=5.22",
     "pandas>=2.2",
     "click>=8.1",
 ]
@@ -503,7 +508,7 @@ CREATE TABLE IF NOT EXISTS requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp DATETIME NOT NULL,
     session_id TEXT NOT NULL,
-    request_id TEXT NOT NULL,
+    request_id TEXT,
     project TEXT,
     git_repository TEXT,
     model TEXT NOT NULL,
@@ -664,7 +669,7 @@ from pydantic import BaseModel, Field
 class UsageRecord(BaseModel):
     timestamp: datetime
     session_id: str
-    request_id: str
+    request_id: str | None = None
     project: str | None = None
     git_repository: str | None = None
     model: str
@@ -844,6 +849,7 @@ git commit -m "feat: add model name normalizer and bundled fallback mapping"
   - `def collect_files(config: Config) -> list[Path]`
   - `def parse_incremental(config: Config) -> int`  # returns number of new records inserted; uses config.storage.db_path
   - `def derive_project(cwd: str) -> tuple[str | None, str | None]`
+  - `def load_history_project_hints(config: Config) -> dict[str, str]`
 - Consumes: `Config`, `UsageRecord`, `db.get_connection`, `model_normalizer.normalize_model_name`.
 
 - [ ] **Step 1: Write the failing test**
@@ -924,6 +930,26 @@ def collect_files(config: Config) -> list[Path]:
     return sorted(base.rglob("*.jsonl"))
 
 
+def load_history_project_hints(config: Config) -> dict[str, str]:
+    """Load optional display-name hints keyed by project path from history.jsonl."""
+    claude_dir = default_claude_dir()
+    history_path = claude_dir / "history.jsonl"
+    if not history_path.exists():
+        return {}
+    hints: dict[str, str] = {}
+    with history_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            cwd = record.get("cwd") or record.get("projectPath")
+            display = record.get("display")
+            if isinstance(cwd, str) and isinstance(display, str) and display:
+                hints[cwd] = display
+    return hints
+
+
 def _read_sync_state(conn: sqlite3.Connection, file_path: Path) -> tuple[int, int | None]:
     row = conn.execute(
         "SELECT last_size, last_line FROM sync_state WHERE file_path = ?",
@@ -972,6 +998,7 @@ def _parse_iso_ts(ts: str) -> datetime:
 
 def parse_incremental(config: Config) -> int:
     files = collect_files(config)
+    history_hints = load_history_project_hints(config)
     inserted = 0
     with get_connection(config.storage.db_path) as conn:
         for file_path in files:
@@ -998,11 +1025,13 @@ def parse_incremental(config: Config) -> int:
                     if normalize_model_name(model) is None:
                         # still store the raw model so users see the row
                         pass
-                    project, repo = derive_project(record.get("cwd", ""))
+                    cwd = record.get("cwd", "")
+                    project, repo = derive_project(cwd)
+                    project = history_hints.get(cwd, project)
                     rec = UsageRecord(
                         timestamp=_parse_iso_ts(record["timestamp"]),
                         session_id=record.get("sessionId", ""),
-                        request_id=record.get("requestId") or f"missing-{line_no}",
+                        request_id=record.get("requestId"),
                         project=project,
                         git_repository=repo,
                         model=model,
@@ -1220,6 +1249,7 @@ git commit -m "feat: pair transcripts and compute response time"
   - `def update_pricing(config: Config, force: bool = False) -> list[PricingRecord]`
   - `def _load_cached_pricing(config: Config) -> list[PricingRecord] | None`
   - `def _save_cached_pricing(config: Config, records: list[PricingRecord]) -> None`
+  - `def upsert_pricing_table(config: Config, records: list[PricingRecord]) -> None`
   - `def fetch_aws_bedrock_json() -> list[PricingRecord]`
   - `def fetch_models_dev() -> list[PricingRecord]`
   - `def load_fallback_pricing() -> list[PricingRecord]`
@@ -1311,7 +1341,8 @@ from pathlib import Path
 import requests
 import yaml
 
-from claude_meter.config import Config, resolve_config_path
+from claude_meter.config import Config
+from claude_meter.db import get_connection
 from claude_meter.models import PricingRecord
 
 
@@ -1377,6 +1408,39 @@ def _save_cached_pricing(config: Config, records: list[PricingRecord]) -> None:
     )
     now = datetime.now(timezone.utc).isoformat()
     meta.write_text(yaml.safe_dump({"updated_at": now}), encoding="utf-8")
+
+
+def upsert_pricing_table(config: Config, records: list[PricingRecord]) -> None:
+    """Persist pricing records to the SQLite pricing table."""
+    with get_connection(config.storage.db_path) as conn:
+        conn.executemany(
+            """INSERT INTO pricing (
+                model, region, input_price_per_1k, output_price_per_1k,
+                cache_creation_price_per_1k, cache_read_price_per_1k,
+                source, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(model, region) DO UPDATE SET
+                input_price_per_1k=excluded.input_price_per_1k,
+                output_price_per_1k=excluded.output_price_per_1k,
+                cache_creation_price_per_1k=excluded.cache_creation_price_per_1k,
+                cache_read_price_per_1k=excluded.cache_read_price_per_1k,
+                source=excluded.source,
+                updated_at=excluded.updated_at""",
+            [
+                (
+                    r.model,
+                    r.region,
+                    r.input_price_per_1k,
+                    r.output_price_per_1k,
+                    r.cache_creation_price_per_1k,
+                    r.cache_read_price_per_1k,
+                    r.source,
+                    r.updated_at.isoformat() if r.updated_at else None,
+                )
+                for r in records
+            ],
+        )
+        conn.commit()
 
 
 def fetch_aws_bedrock_json() -> list[PricingRecord]:
@@ -1484,14 +1548,17 @@ def update_pricing(config: Config, force: bool = False) -> list[PricingRecord]:
     if not force:
         cached = _load_cached_pricing(config)
         if cached is not None:
+            upsert_pricing_table(config, cached)
             return cached
     for fetcher in (fetch_aws_bedrock_json, fetch_models_dev):
         records = fetcher()
         if records:
             _save_cached_pricing(config, records)
+            upsert_pricing_table(config, records)
             return records
     fallback = load_fallback_pricing()
     _save_cached_pricing(config, fallback)
+    upsert_pricing_table(config, fallback)
     return fallback
 ```
 
@@ -1556,15 +1623,15 @@ def test_calculate_cost_known_model() -> None:
         ("anthropic.claude-sonnet-4-5-20260701-v1:0", "us-east-1"): PricingRecord(
             model="anthropic.claude-sonnet-4-5-20260701-v1:0",
             region="us-east-1",
-            input_price_per_1k=3.0,
-            output_price_per_1k=15.0,
-            cache_creation_price_per_1k=3.75,
-            cache_read_price_per_1k=0.3,
+            input_price_per_1k=0.003,
+            output_price_per_1k=0.015,
+            cache_creation_price_per_1k=0.00375,
+            cache_read_price_per_1k=0.0003,
         )
     }
     cost = calculate_cost(record, pricing, "us-east-1")
-    # (1000*3 + 500*15 + 2000*3.75 + 100*0.3) / 1000
-    assert cost == (3.0 + 7.5 + 7.5 + 0.03)
+    # (1000*0.003 + 500*0.015 + 2000*0.00375 + 100*0.0003) / 1000
+    assert cost == (0.003 + 0.0075 + 0.0075 + 0.00003)
 
 
 def test_calculate_cost_unknown_model_returns_none() -> None:
@@ -1697,7 +1764,7 @@ git commit -m "feat: add cost calculation and backfill for existing records"
 - Test: `tests/test_cli.py`
 
 **Interfaces:**
-- Produces: `def main()` registered as `claude-meter` / `cm` console scripts.
+- Produces: `def main()` registered as `claude-meter` / `cm` console scripts, including `claude-meter pricing update`.
 - Consumes: `Config`, `init_db`, `parse_incremental`, `fill_missing_costs`, `update_pricing`.
 
 - [ ] **Step 1: Write the failing test**
@@ -1785,9 +1852,15 @@ def collect() -> None:
     click.echo(f"Inserted {inserted} new records.")
 
 
-@main.command()
+@main.group()
+def pricing() -> None:
+    """Pricing cache and table commands."""
+    pass
+
+
+@pricing.command(name="update")
 @click.option("--force", is_flag=True, help="Ignore cache TTL and refresh now.")
-def pricing(force: bool) -> None:
+def pricing_update(force: bool) -> None:
     """Update Bedrock pricing cache."""
     config = _config_and_db()
     records = update_pricing(config, force=force)
@@ -1843,7 +1916,7 @@ Run:
 pytest tests/test_cli.py -v
 ```
 
-Expected: 2 passing tests. (`watch` import is intentionally resolved in the next task; to keep this task testable, create a stub `src/claude_meter/watcher.py` with `def watch(config, poll_interval=5.0): pass` first.)
+Expected: 3 passing tests. Add a CLI test for `pricing update --force` with pricing network calls monkeypatched. (`watch` import is intentionally resolved in the next task; to keep this task testable, create a stub `src/claude_meter/watcher.py` with `def watch(config, poll_interval=5.0): pass` first.)
 
 - [ ] **Step 5: Commit**
 
@@ -1863,7 +1936,7 @@ git commit -m "feat: add CLI commands init, collect, pricing, config, ui, watch"
 **Interfaces:**
 - Produces:
   - `def watch(config: Config, poll_interval: float = 5.0) -> None`
-- Consumes: `Config`, `parse_incremental`, `fill_missing_costs`.
+- Consumes: `Config`, `parse_incremental`, `fill_missing_costs`, configured projects and transcripts directories.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1917,9 +1990,7 @@ Create `src/claude_meter/watcher.py`:
 
 import time
 
-from pathlib import Path
-
-from claude_meter.config import Config
+from claude_meter.config import Config, default_claude_dir
 from claude_meter.cost import fill_missing_costs
 from claude_meter.db import init_db
 
@@ -1934,7 +2005,7 @@ def _collect_once(config: Config) -> int:
 
 
 def watch(config: Config, poll_interval: float = 5.0) -> None:
-    """Poll for new JSONL data indefinitely."""
+    """Watch project and transcript JSONL data indefinitely."""
     try:
         from watchdog.observers import Observer
         from watchdog.events import FileSystemEventHandler
@@ -1953,8 +2024,14 @@ def watch(config: Config, poll_interval: float = 5.0) -> None:
 
         handler.on_any_event = on_event
         observer = Observer()
-        base = config.claude.projects_dir or (Path.home() / ".claude")
-        observer.schedule(handler, str(base), recursive=True)
+        claude_dir = default_claude_dir()
+        watch_dirs = {
+            config.claude.projects_dir or claude_dir / "projects",
+            config.claude.transcripts_dir or claude_dir / "transcripts",
+        }
+        for watch_dir in watch_dirs:
+            watch_dir.mkdir(parents=True, exist_ok=True)
+            observer.schedule(handler, str(watch_dir), recursive=True)
         observer.start()
         try:
             while True:
@@ -2111,7 +2188,7 @@ git commit -m "feat: add Streamlit UI skeleton with page navigation"
 
 **Interfaces:**
 - Produces: `def _summary_for_period(conn, start, end) -> dict`
-- Consumes: SQLite `requests` table, Altair.
+- Consumes: SQLite `requests` table, Altair / Plotly.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2176,6 +2253,7 @@ def _summary_for_period(conn, start: str, end: str) -> dict:
             COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
             COALESCE(SUM(cache_creation_input_tokens), 0) AS total_cache_creation_input_tokens,
             COALESCE(SUM(cache_read_input_tokens), 0) AS total_cache_read_input_tokens,
+            AVG(response_time_ms) AS avg_response_time_ms,
             COUNT(*) AS request_count
         FROM requests
         WHERE timestamp >= ? AND timestamp < ?""",
@@ -2218,6 +2296,18 @@ def _model_tokens(conn, start: str, end: str) -> pd.DataFrame:
         (start, end),
     ).fetchall()
     return pd.DataFrame(rows, columns=["model", "tokens"])
+
+
+def _daily_avg_response_time(conn, start: str, end: str) -> pd.DataFrame:
+    rows = conn.execute(
+        """SELECT date(timestamp) AS date, AVG(response_time_ms) AS avg_response_time_ms
+           FROM requests
+           WHERE timestamp >= ? AND timestamp < ? AND response_time_ms IS NOT NULL
+           GROUP BY date(timestamp)
+           ORDER BY date""",
+        (start, end),
+    ).fetchall()
+    return pd.DataFrame(rows, columns=["date", "avg_response_time_ms"])
 
 
 def _top_costly_prompts(conn, start: str, end: str, show_prompts: bool, limit: int = 10) -> pd.DataFrame:
@@ -2290,6 +2380,16 @@ def render() -> None:
                 use_container_width=True,
             )
 
+        response_times = _daily_avg_response_time(conn, start, end)
+        if not response_times.empty:
+            st.altair_chart(
+                alt.Chart(response_times)
+                .mark_line(point=True)
+                .encode(x="date:T", y="avg_response_time_ms:Q")
+                .properties(title="Average Response Time"),
+                use_container_width=True,
+            )
+
         top = _top_costly_prompts(conn, start, end, config.privacy.show_prompts_in_ui)
         if not top.empty:
             st.subheader("Top Costly Prompts")
@@ -2326,7 +2426,7 @@ git commit -m "feat: populate Overview page with real SQLite aggregates and char
 - Test: `tests/test_ui_pages.py`
 
 **Interfaces:**
-- Produces: pages consuming `requests` and `pricing` tables.
+- Produces: pages consuming `requests`, `pricing`, and persisted config data.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2428,7 +2528,7 @@ def render() -> None:
                 st.dataframe(requests_df[mask], use_container_width=True)
 ```
 
-Implement `project_breakdown.py`, `model_breakdown.py`, `pricing_settings.py`, and `config_page.py` similarly with table/grids reading from `requests` / `pricing` tables and config display.
+Implement `project_breakdown.py` and `model_breakdown.py` similarly with table/grids reading from the `requests` table. Implement `pricing_settings.py` with pricing source display, `pricing update --force` equivalent refresh, SQLite `pricing` table display, and guarded editing of a local fallback-price override stored under `~/.claude-meter/`. Implement `config_page.py` with current config display and editable persisted settings for region, prompt storage, prompt visibility, UI host/port, and pricing TTL.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -2456,7 +2556,7 @@ git commit -m "feat: implement remaining Streamlit UI pages"
 - Create: `tests/test_integration.py`
 
 **Interfaces:**
-- Produces: end-to-end test covering `init -> collect -> cost -> ui` (pricing is exercised separately to keep the smoke test deterministic).
+- Produces: end-to-end smoke tests covering `init -> collect -> cost backfill -> UI entrypoint import` (pricing network calls are monkeypatched to keep tests deterministic).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2478,6 +2578,12 @@ def test_full_flow(temp_home: Path, sample_project_jsonl: Path) -> None:
     assert "Inserted 1 new records" in result.output
     db_path = temp_home / ".claude-meter" / "data.db"
     assert db_path.exists()
+
+
+def test_ui_entrypoint_importable() -> None:
+    from claude_meter.ui import app
+
+    assert hasattr(app, "main")
 ```
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -2487,7 +2593,7 @@ Run:
 pytest tests/test_integration.py -v
 ```
 
-Expected: may fail on pricing network or cost backfill; adjust assertions to match actual behavior.
+Expected: no real pricing network call; monkeypatch pricing refresh if cost backfill would otherwise fetch external data.
 
 - [ ] **Step 3: Fix any issues and run quality gates**
 
@@ -2517,11 +2623,14 @@ git commit -m "test: add integration smoke test and quality gates"
 - Visualization → Tasks 12–14 (Streamlit UI).
 - Multi-OS paths → Task 2 (`config.default_claude_dir`).
 - Pricing fetch priority chain → Task 8 (`pricing.update_pricing`).
+- Pricing SQLite persistence → Task 8 (`pricing.upsert_pricing_table`).
 - Prompt/response storage and privacy toggles → Task 7 (`collector._load_transcripts`) and `Config.privacy`.
 - Project/git derivation → Task 6 (`collector.derive_project`).
+- `history.jsonl` auxiliary project hints → Task 6 (`collector.load_history_project_hints`).
 - Response time → Task 7 (`collector._compute_response_time`).
+- Average response-time trend → Task 13 (`overview._daily_avg_response_time`).
 - SQLite schema → Task 3 (`db.SCHEMA_SQL`).
-- CLI commands → Task 10 (`cli.main`).
+- CLI commands including `pricing update` → Task 10 (`cli.main`).
 - Config file structure → Task 2.
 - Cost calculation formula → Task 9 (`cost.calculate_cost`).
 
