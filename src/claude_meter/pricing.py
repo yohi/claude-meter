@@ -1,6 +1,8 @@
 """Fetch and cache Bedrock pricing from models.dev / AWS / built-in fallback."""
 
 import json
+import logging
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -12,6 +14,8 @@ import yaml
 from claude_meter.config import Config
 from claude_meter.db import get_connection
 from claude_meter.models import PricingRecord
+
+logger = logging.getLogger(__name__)
 
 # AWS publishes the Bedrock price list as a large JSON at .../current/index.json
 # (the bare .../current/ path is a 404). It uses human-readable model names and is
@@ -160,7 +164,8 @@ def fetch_aws_bedrock_json() -> list[PricingRecord]:
         resp = requests.get(AWS_BEDROCK_PRICING_URL, timeout=60)
         resp.raise_for_status()
         data = resp.json()
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed to fetch pricing from %s: %s", AWS_BEDROCK_PRICING_URL, exc)
         return []
     products = data.get("products", {})
     terms = data.get("terms", {}).get("OnDemand", {})
@@ -220,7 +225,8 @@ def fetch_models_dev() -> list[PricingRecord]:
         resp = requests.get(MODELS_DEV_URL, timeout=30)
         resp.raise_for_status()
         data = resp.json()
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed to fetch pricing from %s: %s", MODELS_DEV_URL, exc)
         return []
     if not isinstance(data, dict):
         return []
@@ -251,15 +257,24 @@ def fetch_models_dev() -> list[PricingRecord]:
     return records
 
 
+_FETCHERS_BY_SOURCE: dict[str, Callable[[], list[PricingRecord]]] = {
+    "models_dev": fetch_models_dev,
+    "aws_bedrock_json": fetch_aws_bedrock_json,
+}
+
+
 def update_pricing(config: Config, force: bool = False) -> list[PricingRecord]:
     if not force:
         cached = _load_cached_pricing(config)
         if cached is not None:
             upsert_pricing_table(config, cached)
             return cached
-    # models.dev is the reliable ARN-keyed source; AWS is a large human-named
-    # secondary; the bundled JSON is the final offline fallback.
-    for fetcher in (fetch_models_dev, fetch_aws_bedrock_json):
+    # Fetcher order follows config: primary_source then fallback_source. Unknown
+    # source names are ignored; the bundled JSON is the final offline fallback.
+    for name in (config.pricing.primary_source, config.pricing.fallback_source):
+        fetcher = _FETCHERS_BY_SOURCE.get(name)
+        if fetcher is None:
+            continue
         records = fetcher()
         if records:
             _save_cached_pricing(config, records)
