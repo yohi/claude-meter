@@ -211,11 +211,17 @@ def parse_incremental(config: Config) -> int:
                         cache_read_input_tokens=usage.get("cache_read_input_tokens", 0) or 0,
                         source_file=file_path,
                     )
-                    key = (rec.session_id, rec.request_id)
+                    # Transcript matching must use the raw requestId (which may be
+                    # None) because `_load_transcripts` keys its dict the same way.
+                    # The synthesized `rec.request_id` above only exists to satisfy
+                    # the DB's NOT NULL/UNIQUE(session_id, request_id) constraint and
+                    # would never match a transcript entry.
+                    raw_request_id = record.get("requestId")
+                    key = (rec.session_id, raw_request_id)
                     pair = transcripts.get(key)
                     if pair is not None:
                         rec.response_time_ms = _compute_response_time(
-                            rec.session_id, rec.request_id, rec.timestamp, transcripts
+                            rec.session_id, raw_request_id, rec.timestamp, transcripts
                         )
                         if config.privacy.store_prompts:
                             rec.prompt_text = pair[0][: config.privacy.max_prompt_length]

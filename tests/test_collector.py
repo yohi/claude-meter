@@ -107,3 +107,52 @@ def test_collect_survives_list_content_and_missing_timestamp(temp_home: Path) ->
         ).fetchone()
         assert row["prompt_text"] == "hello world"
         assert row["response_text"] == "hi there"
+
+
+def test_response_time_computed_when_request_id_missing(temp_home: Path) -> None:
+    """requestId が欠損しているレコードでもトランスクリプト照合が成功すること。"""
+    from contextlib import closing
+    from claude_meter.db import get_connection
+
+    config = load_config()
+    init_db(config.storage.db_path)
+    projects = temp_home / ".claude" / "projects" / "demo"
+    projects.mkdir(parents=True)
+    rec_a = {
+        "type": "assistant",
+        "timestamp": "2026-07-08T10:00:00Z",
+        "cwd": "/x",
+        "sessionId": "s1",
+        # requestId is intentionally absent
+        "message": {"model": "m", "usage": {"input_tokens": 5}},
+    }
+    (projects / "s1.jsonl").write_text(json.dumps(rec_a) + "\n", encoding="utf-8")
+
+    transcripts = temp_home / ".claude" / "transcripts"
+    transcripts.mkdir(parents=True)
+    user_rec = {
+        "type": "user",
+        "timestamp": "2026-07-08T09:59:59Z",
+        "sessionId": "s1",
+        # requestId is also absent in the transcript source
+        "message": {"content": "hello"},
+    }
+    asst_rec = {
+        "type": "assistant",
+        "timestamp": "2026-07-08T10:00:00Z",
+        "sessionId": "s1",
+        "message": {"content": "world"},
+    }
+    (transcripts / "s1.jsonl").write_text(
+        json.dumps(user_rec) + "\n" + json.dumps(asst_rec) + "\n", encoding="utf-8"
+    )
+
+    inserted = parse_incremental(config)
+    assert inserted == 1
+    with closing(get_connection(config.storage.db_path)) as conn:
+        row = conn.execute(
+            "SELECT prompt_text, response_text, response_time_ms FROM requests WHERE session_id = 's1'"
+        ).fetchone()
+        assert row["prompt_text"] == "hello"
+        assert row["response_text"] == "world"
+        assert row["response_time_ms"] == 1000
