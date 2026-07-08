@@ -30,8 +30,7 @@ def watch(config: Config, poll_interval: float = 5.0) -> None:
         def on_event(event: Any) -> None:
             if event.src_path.endswith(".jsonl"):
                 _collect_once(config)
-            if original_on_any_event is not None:
-                original_on_any_event(event)
+            original_on_any_event(event)
 
         handler.on_any_event = on_event  # type: ignore[method-assign]
         observer = Observer()
