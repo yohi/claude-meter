@@ -21,7 +21,7 @@ def _config_and_db() -> Config:
 
 
 @click.group()
-@click.version_option(version="0.1.0")
+@click.version_option(package_name="claude-meter")
 def main() -> None:
     """Local ClaudeCode usage and cost analyzer."""
     pass
