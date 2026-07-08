@@ -73,7 +73,12 @@ def default_claude_dir() -> Path:
 def load_config(path: Path | None = None) -> Config:
     config_path = path or resolve_config_path()
     if config_path.exists():
-        raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        try:
+            raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        except yaml.YAMLError as e:
+            raise ValueError(
+                f"Invalid YAML in config file {config_path}: {e}"
+            ) from e
         return Config.model_validate(raw or {})
     return Config()
 
