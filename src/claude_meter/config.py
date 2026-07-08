@@ -27,6 +27,7 @@ class _PricingConfig(BaseModel):
 class _PrivacyConfig(BaseModel):
     store_prompts: bool = Field(default=True)
     max_prompt_length: int = Field(default=10000)
+    max_response_length: int = Field(default=10000)
     show_prompts_in_ui: bool = Field(default=True)
 
 

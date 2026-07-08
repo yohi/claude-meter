@@ -161,7 +161,7 @@ def _compute_response_time(
 def parse_incremental(config: Config) -> int:
     files = collect_files(config)
     history_hints = load_history_project_hints(config)
-    transcripts = _load_transcripts(config) if config.privacy.store_prompts else {}
+    transcripts = _load_transcripts(config)
     inserted = 0
     with get_connection(config.storage.db_path) as conn:
         for file_path in files:
@@ -211,15 +211,15 @@ def parse_incremental(config: Config) -> int:
                         cache_read_input_tokens=usage.get("cache_read_input_tokens", 0) or 0,
                         source_file=file_path,
                     )
-                    if config.privacy.store_prompts:
-                        key = (rec.session_id, rec.request_id)
-                        pair = transcripts.get(key)
-                        if pair is not None:
+                    key = (rec.session_id, rec.request_id)
+                    pair = transcripts.get(key)
+                    if pair is not None:
+                        rec.response_time_ms = _compute_response_time(
+                            rec.session_id, rec.request_id, rec.timestamp, transcripts
+                        )
+                        if config.privacy.store_prompts:
                             rec.prompt_text = pair[0][: config.privacy.max_prompt_length]
-                            rec.response_text = pair[1][: config.privacy.max_prompt_length]
-                            rec.response_time_ms = _compute_response_time(
-                                rec.session_id, rec.request_id, rec.timestamp, transcripts
-                            )
+                            rec.response_text = pair[1][: config.privacy.max_response_length]
                     _insert_usage(conn, rec)
                     inserted += 1
             _update_sync_state(conn, file_path, current_size, line_no)
