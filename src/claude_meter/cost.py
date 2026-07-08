@@ -67,11 +67,19 @@ def fill_missing_costs(config: Config, region: str | None = None) -> int:
             )
             cost = calculate_cost(record, pricing, row_region)
             if row["region"] is None:
-                # region 未設定時は region を必ず埋める。cost が算出できれば併せて埋める。
-                conn.execute(
-                    "UPDATE requests SET cost_usd = ?, region = ? WHERE id = ?",
-                    (cost, row_region, row["id"]),
-                )
+                if cost is not None:
+                    # region 未設定時は region を必ず埋める。cost が算出できれば併せて埋める。
+                    conn.execute(
+                        "UPDATE requests SET cost_usd = ?, region = ? WHERE id = ?",
+                        (cost, row_region, row["id"]),
+                    )
+                else:
+                    # cost が算出できない場合は region のみ埋める。既存の cost_usd を
+                    # NULL で上書きしないようにする。
+                    conn.execute(
+                        "UPDATE requests SET region = ? WHERE id = ?",
+                        (row_region, row["id"]),
+                    )
             elif cost is not None:
                 # region は既にあるため cost のみ更新。cost が None なら書き込む意味がないのでスキップ。
                 conn.execute(
