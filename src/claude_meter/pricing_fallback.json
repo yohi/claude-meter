@@ -1,0 +1,28 @@
+{
+  "models": {
+    "claude-sonnet-4-5-20260701": {
+      "arn_keys": ["anthropic.claude-sonnet-4-5-20260701-v1:0"],
+      "display_name": "Claude Sonnet 4.5",
+      "prices": {
+        "us-east-1": {
+          "input_price_per_1k": 0.003,
+          "output_price_per_1k": 0.015,
+          "cache_creation_price_per_1k": 0.00375,
+          "cache_read_price_per_1k": 0.0003
+        }
+      }
+    },
+    "claude-haiku-4-5-20251001": {
+      "arn_keys": ["anthropic.claude-haiku-4-5-20251001-v1:0"],
+      "display_name": "Claude Haiku 4.5",
+      "prices": {
+        "us-east-1": {
+          "input_price_per_1k": 0.0008,
+          "output_price_per_1k": 0.004,
+          "cache_creation_price_per_1k": 0.001,
+          "cache_read_price_per_1k": 0.0001
+        }
+      }
+    }
+  }
+}
