@@ -1,6 +1,7 @@
 """SQLite database schema and connection helpers."""
 
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 SCHEMA_SQL = """
@@ -75,6 +76,6 @@ def get_connection(db_path: Path) -> sqlite3.Connection:
 
 
 def init_db(db_path: Path) -> None:
-    with get_connection(db_path) as conn:
+    with closing(get_connection(db_path)) as conn:
         conn.executescript(SCHEMA_SQL)
         conn.commit()
