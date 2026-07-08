@@ -17,7 +17,7 @@
 - Default region for cost calculation and `requests.region` is `us-east-1`, overridable in `~/.claude-meter/config.yaml` via `claude.region`.
 - Multi-OS path resolution: macOS/Linux default to `~/.claude`; Windows defaults to `%LOCALAPPDATA%\Claude`; overridable via `claude.projects_dir` and `claude.transcripts_dir`.
 - Database path default: `~/.claude-meter/data.db`; config default: `~/.claude-meter/config.yaml`; pricing cache default: `~/.claude-meter/pricing.json`.
-- `requests` uniqueness is `(session_id, request_id)`. `request_id` remains nullable to match the design schema; rows without `requestId` are inserted with `NULL` and rely on `sync_state` for normal incremental idempotence.
+- `requests` uniqueness is `(session_id, request_id)`. To keep deduplication robust in SQLite, rows without `requestId` are normalized to a deterministic synthetic request ID (for example `missing-{file_path.name}-{line_no}`) before insertion instead of storing `NULL`.
 - `~/.claude/history.jsonl` is an optional auxiliary source for project display names and path association; missing or malformed history data must not block usage collection.
 - Pricing refresh must update both `~/.claude-meter/pricing.json` and the SQLite `pricing` table.
 - Unknown models result in `cost_usd = NULL` and display as "Unknown model" in the UI.
@@ -508,7 +508,7 @@ CREATE TABLE IF NOT EXISTS requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp DATETIME NOT NULL,
     session_id TEXT NOT NULL,
-    request_id TEXT,
+    request_id TEXT NOT NULL,
     project TEXT,
     git_repository TEXT,
     model TEXT NOT NULL,
@@ -669,7 +669,7 @@ from pydantic import BaseModel, Field
 class UsageRecord(BaseModel):
     timestamp: datetime
     session_id: str
-    request_id: str | None = None
+    request_id: str
     project: str | None = None
     git_repository: str | None = None
     model: str
@@ -937,16 +937,19 @@ def load_history_project_hints(config: Config) -> dict[str, str]:
     if not history_path.exists():
         return {}
     hints: dict[str, str] = {}
-    with history_path.open("r", encoding="utf-8") as f:
-        for line in f:
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            cwd = record.get("cwd") or record.get("projectPath")
-            display = record.get("display")
-            if isinstance(cwd, str) and isinstance(display, str) and display:
-                hints[cwd] = display
+    try:
+        with history_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                cwd = record.get("cwd") or record.get("projectPath")
+                display = record.get("display")
+                if isinstance(cwd, str) and cwd and isinstance(display, str) and display:
+                    hints[cwd] = display
+    except OSError:
+        return {}
     return hints
 
 
@@ -1031,7 +1034,7 @@ def parse_incremental(config: Config) -> int:
                     rec = UsageRecord(
                         timestamp=_parse_iso_ts(record["timestamp"]),
                         session_id=record.get("sessionId", ""),
-                        request_id=record.get("requestId"),
+                        request_id=record.get("requestId") or f"missing-{file_path.name}-{line_no}",
                         project=project,
                         git_repository=repo,
                         model=model,
@@ -1602,6 +1605,8 @@ Create `tests/test_cost.py`:
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from claude_meter.config import Config
 from claude_meter.cost import calculate_cost
 from claude_meter.models import PricingRecord, UsageRecord
@@ -1631,7 +1636,7 @@ def test_calculate_cost_known_model() -> None:
     }
     cost = calculate_cost(record, pricing, "us-east-1")
     # (1000*0.003 + 500*0.015 + 2000*0.00375 + 100*0.0003) / 1000
-    assert cost == (0.003 + 0.0075 + 0.0075 + 0.00003)
+    assert cost == pytest.approx(0.003 + 0.0075 + 0.0075 + 0.00003)
 
 
 def test_calculate_cost_unknown_model_returns_none() -> None:
@@ -1712,11 +1717,12 @@ def fill_missing_costs(config: Config, region: str | None = None) -> int:
     updated = 0
     with get_connection(config.storage.db_path) as conn:
         cursor = conn.execute(
-            "SELECT id, model, input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens "
+            "SELECT id, model, region, input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens "
             "FROM requests WHERE cost_usd IS NULL OR region IS NULL"
         )
         rows = cursor.fetchall()
         for row in rows:
+            row_region = row["region"] or target_region
             record = UsageRecord(
                 timestamp=datetime.now(timezone.utc),
                 session_id="",
@@ -1728,11 +1734,17 @@ def fill_missing_costs(config: Config, region: str | None = None) -> int:
                 cache_read_input_tokens=row["cache_read_input_tokens"],
                 source_file=Path("."),
             )
-            cost = calculate_cost(record, pricing, target_region)
-            conn.execute(
-                "UPDATE requests SET cost_usd = ?, region = ? WHERE id = ?",
-                (cost, target_region, row["id"]),
-            )
+            cost = calculate_cost(record, pricing, row_region)
+            if row["region"] is None:
+                conn.execute(
+                    "UPDATE requests SET cost_usd = ?, region = ? WHERE id = ?",
+                    (cost, row_region, row["id"]),
+                )
+            else:
+                conn.execute(
+                    "UPDATE requests SET cost_usd = ? WHERE id = ?",
+                    (cost, row["id"]),
+                )
             updated += 1
         conn.commit()
     return updated
