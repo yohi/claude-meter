@@ -9,6 +9,24 @@
           "output_price_per_1k": 0.015,
           "cache_creation_price_per_1k": 0.00375,
           "cache_read_price_per_1k": 0.0003
+        },
+        "eu-west-1": {
+          "input_price_per_1k": 0.003,
+          "output_price_per_1k": 0.015,
+          "cache_creation_price_per_1k": 0.00375,
+          "cache_read_price_per_1k": 0.0003
+        },
+        "ap-southeast-2": {
+          "input_price_per_1k": 0.003,
+          "output_price_per_1k": 0.015,
+          "cache_creation_price_per_1k": 0.00375,
+          "cache_read_price_per_1k": 0.0003
+        },
+        "ap-northeast-1": {
+          "input_price_per_1k": 0.003,
+          "output_price_per_1k": 0.015,
+          "cache_creation_price_per_1k": 0.00375,
+          "cache_read_price_per_1k": 0.0003
         }
       }
     },
@@ -17,6 +35,24 @@
       "display_name": "Claude Haiku 4.5",
       "prices": {
         "us-east-1": {
+          "input_price_per_1k": 0.0008,
+          "output_price_per_1k": 0.004,
+          "cache_creation_price_per_1k": 0.001,
+          "cache_read_price_per_1k": 0.0001
+        },
+        "eu-west-1": {
+          "input_price_per_1k": 0.0008,
+          "output_price_per_1k": 0.004,
+          "cache_creation_price_per_1k": 0.001,
+          "cache_read_price_per_1k": 0.0001
+        },
+        "ap-southeast-2": {
+          "input_price_per_1k": 0.0008,
+          "output_price_per_1k": 0.004,
+          "cache_creation_price_per_1k": 0.001,
+          "cache_read_price_per_1k": 0.0001
+        },
+        "ap-northeast-1": {
           "input_price_per_1k": 0.0008,
           "output_price_per_1k": 0.004,
           "cache_creation_price_per_1k": 0.001,

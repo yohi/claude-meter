@@ -13,6 +13,20 @@ def test_load_fallback_pricing_has_records() -> None:
     assert all(r.region for r in records)
 
 
+def test_load_fallback_pricing_covers_non_us_regions() -> None:
+    """フォーレバッズリク値だけでなく主要リリージン・リリージョンもカバーし、
+    us-east-1 以外の region でも calculate_cost() が価格を引き当てられること。"""
+    records = load_fallback_pricing()
+    regions = {r.region for r in records}
+    assert {"us-east-1", "eu-west-1", "ap-southeast-2", "ap-northeast-1"} <= regions
+    # 各パリグリジョンは完全な価格（4項目すべて not None）を持ち、Noneをor 0に依存しないこと。
+    for record in records:
+        assert record.input_price_per_1k is not None
+        assert record.output_price_per_1k is not None
+        assert record.cache_creation_price_per_1k is not None
+        assert record.cache_read_price_per_1k is not None
+
+
 def test_update_pricing_uses_cache_when_fresh(temp_home: Path) -> None:
     from claude_meter.db import init_db
 
