@@ -56,10 +56,11 @@ def render() -> None:
             if selected:
                 requests_df = _session_requests(conn, selected, config.privacy.show_prompts_in_ui)
                 st.dataframe(requests_df, use_container_width=True)
-                search = st.text_input("Search prompts/responses")
-                if search and config.privacy.show_prompts_in_ui:
-                    mask = (
-                        requests_df["prompt_text"].str.contains(search, na=False, case=False)
-                        | requests_df["response_text"].str.contains(search, na=False, case=False)
-                    )
-                    st.dataframe(requests_df[mask], use_container_width=True)
+                if config.privacy.show_prompts_in_ui:
+                    search = st.text_input("Search prompts/responses")
+                    if search:
+                        mask = (
+                            requests_df["prompt_text"].str.contains(search, na=False, case=False, regex=False)
+                            | requests_df["response_text"].str.contains(search, na=False, case=False, regex=False)
+                        )
+                        st.dataframe(requests_df[mask], use_container_width=True)
