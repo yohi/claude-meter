@@ -6,14 +6,14 @@
 
 **Goal:** Build a local-only Python tool (`claude-meter`) that parses ClaudeCode JSONL usage logs, estimates AWS Bedrock costs from cached pricing, stores everything in SQLite, and exposes the data through a Streamlit Web UI and a small CLI.
 
-**Architecture:** A headless `Collector` incrementally parses `~/.claude/projects/*/*.jsonl` and `~/.claude/transcripts/*.jsonl` into a normalized `requests` table, using `~/.claude/history.jsonl` as an optional project-association hint; a `Pricing` module keeps per-region per-model prices fresh from AWS / models.dev / built-in fallback and persists them to both JSON cache and the SQLite `pricing` table; a `Streamlit` multi-page app visualizes aggregated usage; and a `CLI` (Click/Typer) wires initialization, one-shot collection, filesystem watch, UI launch, and pricing refresh together. All state lives under `~/.claude-meter/`.
+**Architecture:** A headless `Collector` incrementally parses `~/.claude/projects/*/*.jsonl` and `~/.claude/transcripts/*.jsonl` into a normalized `requests` table, using `~/.claude/history.jsonl` as an optional project-association hint; a `Pricing` module keeps per-region per-model prices fresh from models.dev / AWS / built-in fallback and persists them to both JSON cache and the SQLite `pricing` table; a `Streamlit` multi-page app visualizes aggregated usage; and a `CLI` (Click/Typer) wires initialization, one-shot collection, filesystem watch, UI launch, and pricing refresh together. All state lives under `~/.claude-meter/`.
 
 **Tech Stack:** Python 3.10+, SQLite, Streamlit, watchdog, requests, pydantic, Altair / Plotly, pytest.
 
 ## Global Constraints
 
 - All data must stay local; only pricing data may be fetched externally.
-- External pricing sources, in order: `https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/`, then `https://models.dev/providers/amazon-bedrock/`, then a built-in JSON fallback shipped with the package.
+- External pricing sources, in order: `https://models.dev/api.json` (primary; returns ARN-style Bedrock model ids that match ClaudeCode model names), then `https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/index.json` (secondary; accepted only when it yields ARN-style keys), then a built-in JSON fallback shipped with the package.
 - Default region for cost calculation and `requests.region` is `us-east-1`, overridable in `~/.claude-meter/config.yaml` via `claude.region`.
 - Multi-OS path resolution: macOS/Linux default to `~/.claude`; Windows defaults to `%LOCALAPPDATA%\Claude`; overridable via `claude.projects_dir` and `claude.transcripts_dir`.
 - Database path default: `~/.claude-meter/data.db`; config default: `~/.claude-meter/config.yaml`; pricing cache default: `~/.claude-meter/pricing.json`.
