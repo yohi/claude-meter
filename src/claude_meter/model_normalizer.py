@@ -27,6 +27,18 @@ _INFERENCE_PROFILE_PREFIXES = ("us", "eu", "au", "jp", "apac", "global")
 _VERSION_SUFFIX_RE = re.compile(r"-v\d+:\d+$")
 
 
+def _strip_inference_profile_prefix(value: str) -> str:
+    """Strip a leading Bedrock inference-profile region prefix (e.g. "eu.").
+
+    Returns ``value`` unchanged if it has no recognized prefix, so callers can
+    detect "no match" via ``result == value``.
+    """
+    head, sep, tail = value.partition(".")
+    if sep and head in _INFERENCE_PROFILE_PREFIXES:
+        return tail
+    return value
+
+
 def normalize_model_name(raw_model: str) -> str | None:
     """Return a canonical key if we recognize this model, otherwise None.
 
@@ -39,8 +51,8 @@ def normalize_model_name(raw_model: str) -> str | None:
         return raw
     if raw.startswith(("claude-", "anthropic.claude-")):
         return raw
-    head, sep, tail = raw.partition(".")
-    if sep and head in _INFERENCE_PROFILE_PREFIXES and tail.startswith("anthropic.claude-"):
+    stripped = _strip_inference_profile_prefix(raw)
+    if stripped != raw and stripped.startswith("anthropic.claude-"):
         return raw
     return None
 
@@ -60,9 +72,7 @@ def canonical_model_key(model_id: str) -> str:
     the same underlying model.
     """
     key = model_id.strip().lower()
-    head, sep, tail = key.partition(".")
-    if sep and head in _INFERENCE_PROFILE_PREFIXES:
-        key = tail
+    key = _strip_inference_profile_prefix(key)
     if key.startswith("anthropic."):
         key = key[len("anthropic.") :]
     return _VERSION_SUFFIX_RE.sub("", key)
