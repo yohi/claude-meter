@@ -287,6 +287,7 @@ pricing:
 privacy:
   store_prompts: true
   max_prompt_length: 10000
+  max_response_length: 10000
   show_prompts_in_ui: true
 
 ui:
