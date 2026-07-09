@@ -73,22 +73,29 @@ def ui(port: int | None, host: str | None) -> None:
     config = load_config()
     ui_port = port or config.ui.port
     ui_host = host or config.ui.host
-    subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "streamlit",
-            "run",
-            str(Path(__file__).resolve().parent / "ui" / "app.py"),
-            "--server.port",
-            str(ui_port),
-            "--server.address",
-            ui_host,
-            "--browser.gatherUsageStats",
-            "false",
-        ],
-        check=True,
-    )
+    try:
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "streamlit",
+                "run",
+                str(Path(__file__).resolve().parent / "ui" / "app.py"),
+                "--server.port",
+                str(ui_port),
+                "--server.address",
+                ui_host,
+                "--browser.gatherUsageStats",
+                "false",
+            ],
+            check=True,
+        )
+    except FileNotFoundError as exc:
+        click.echo("Failed to launch Streamlit. Is it installed?", err=True)
+        raise SystemExit(1) from exc
+    except subprocess.CalledProcessError as exc:
+        click.echo(f"Streamlit exited with code {exc.returncode}.", err=True)
+        raise SystemExit(exc.returncode) from exc
 
 
 @main.command(name="watch")
