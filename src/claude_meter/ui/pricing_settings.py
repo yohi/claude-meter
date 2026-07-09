@@ -2,6 +2,7 @@
 
 from contextlib import closing
 import sqlite3
+import math
 
 import pandas as pd
 import streamlit as st
@@ -10,6 +11,28 @@ from claude_meter.config import load_config
 from claude_meter.db import get_connection
 from claude_meter.models import PricingRecord
 from claude_meter.pricing import load_fallback_pricing, save_pricing_overrides, update_pricing
+
+_PRICE_FIELDS = (
+    "input_price_per_1k",
+    "output_price_per_1k",
+    "cache_creation_price_per_1k",
+    "cache_read_price_per_1k",
+)
+
+
+def _is_missing_price(value: float | None) -> bool:
+    return value is None or (isinstance(value, float) and math.isnan(value))
+
+
+def _price_fields_differ(a: PricingRecord, b: PricingRecord) -> bool:
+    for field in _PRICE_FIELDS:
+        av = getattr(a, field)
+        bv = getattr(b, field)
+        if _is_missing_price(av) and _is_missing_price(bv):
+            continue
+        if _is_missing_price(av) or _is_missing_price(bv) or av != bv:
+            return True
+    return False
 
 
 def _list_pricing(conn: sqlite3.Connection) -> pd.DataFrame:
@@ -59,23 +82,24 @@ def render() -> None:
     st.dataframe(pricing, use_container_width=True)
 
     st.subheader("Fallback Price Overrides")
-    fallback = pd.DataFrame(
-        [record.model_dump(mode="json") for record in load_fallback_pricing(config)]
-    )
+    fallback = pd.DataFrame([record.model_dump(mode="json") for record in load_fallback_pricing()])
     editable = st.data_editor(
         fallback,
         disabled=["model", "region", "source", "updated_at"],
         hide_index=True,
         key="fallback_price_overrides",
-        num_rows="dynamic",
+        num_rows="fixed",
         use_container_width=True,
     )
     if st.button("Save fallback price overrides"):
-        overrides = [
-            PricingRecord.model_validate(record).model_copy(
-                update={"source": "local_override"}
-            )
-            for record in editable.to_dict("records")
-        ]
+        baseline = {(record.model, record.region): record for record in load_fallback_pricing()}
+        overrides: list[PricingRecord] = []
+        for record in editable.to_dict("records"):
+            validated = PricingRecord.model_validate(record)
+            if not validated.model or not validated.region:
+                continue
+            base = baseline.get((validated.model, validated.region))
+            if base is None or _price_fields_differ(base, validated):
+                overrides.append(validated.model_copy(update={"source": "local_override"}))
         save_pricing_overrides(config, overrides)
         st.success("Fallback price overrides saved.")

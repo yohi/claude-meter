@@ -14,9 +14,7 @@ def test_collect_once_idempotent(temp_home: Path, monkeypatch: pytest.MonkeyPatc
     # - _collect_once() calls fill_missing_costs(), which would otherwise reach
     #   update_pricing() and attempt network fetches. Patch the name bound INSIDE
     #   the watcher module (it does `from claude_meter.cost import fill_missing_costs`).
-    monkeypatch.setattr(
-        "claude_meter.watcher.fill_missing_costs", lambda config, region=None: 0
-    )
+    monkeypatch.setattr("claude_meter.watcher.fill_missing_costs", lambda config, region=None: 0)
 
     config = Config(
         claude={
@@ -78,15 +76,23 @@ def test_collect_once_reprices_reprocessed_existing_record(temp_home: Path) -> N
     )
 
     assert _collect_once(config) == 1
+
     with closing(get_connection(config.storage.db_path)) as conn:
         conn.execute("DELETE FROM sync_state")
+
+        conn.execute("UPDATE requests SET cost_usd = NULL")
+
         conn.commit()
 
     assert _collect_once(config) == 0
+
     with closing(get_connection(config.storage.db_path)) as conn:
         row = conn.execute("SELECT cost_usd, region FROM requests").fetchone()
+
     assert row is not None
+
     assert row["cost_usd"] is not None
+
     assert row["region"] == "us-east-1"
 
 

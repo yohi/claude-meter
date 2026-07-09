@@ -58,9 +58,10 @@ def normalize_model_name(raw_model: str) -> str | None:
 
 
 def display_model_name(model: str) -> str:
-    if normalize_model_name(model) is None:
+    normalized = normalize_model_name(model)
+    if normalized is None:
         return "Unknown model"
-    return model
+    return normalized
 
 
 def model_to_arn_keys(normalized: str) -> list[str]:

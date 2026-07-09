@@ -125,9 +125,7 @@ def _parse_transcript_file(
             raw_content = record.get("message", {}).get("content", "")
             if isinstance(raw_content, list):
                 content = "".join(
-                    block.get("text", "")
-                    for block in raw_content
-                    if isinstance(block, dict)
+                    block.get("text", "") for block in raw_content if isinstance(block, dict)
                 )
             elif isinstance(raw_content, str):
                 content = raw_content
@@ -182,6 +180,7 @@ def _compute_response_time(
     delta = assistant_ts - user_ts
     return max(0, int(delta.total_seconds() * 1000))
 
+
 def _backfill_transcript_data(
     conn: sqlite3.Connection,
     config: Config,
@@ -191,10 +190,14 @@ def _backfill_transcript_data(
         if request_id is None:
             continue
         row = conn.execute(
-            "SELECT timestamp FROM requests WHERE session_id = ? AND request_id = ?",
+            "SELECT timestamp, prompt_text FROM requests WHERE session_id = ? AND request_id = ?",
             (session_id, request_id),
         ).fetchone()
+
         if row is None:
+            continue
+
+        if row["prompt_text"] is not None:
             continue
         response_time_ms = _compute_response_time(
             session_id, request_id, _parse_iso_ts(row["timestamp"]), transcripts
@@ -282,7 +285,8 @@ def parse_incremental(config: Config) -> int:
                         region=config.claude.region,
                         input_tokens=usage.get("input_tokens", 0) or 0,
                         output_tokens=usage.get("output_tokens", 0) or 0,
-                        cache_creation_input_tokens=usage.get("cache_creation_input_tokens", 0) or 0,
+                        cache_creation_input_tokens=usage.get("cache_creation_input_tokens", 0)
+                        or 0,
                         cache_read_input_tokens=usage.get("cache_read_input_tokens", 0) or 0,
                         source_file=file_path,
                     )

@@ -393,6 +393,11 @@ def update_pricing(config: Config, force: bool = False) -> list[PricingRecord]:
         upsert_pricing_table(config, effective_records)
         return effective_records
     fallback = load_fallback_pricing(config)
+
     _save_cached_pricing(config, fallback)
-    upsert_pricing_table(config, fallback)
-    return fallback
+
+    effective_records = _apply_pricing_overrides(config, fallback)
+
+    upsert_pricing_table(config, effective_records)
+
+    return effective_records
