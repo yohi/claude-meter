@@ -60,3 +60,4 @@ def render() -> None:
             st.error(f"Failed to save configuration: {exc}")
         else:
             st.success("Configuration saved.")
+            st.rerun()
