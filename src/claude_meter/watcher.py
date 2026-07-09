@@ -36,15 +36,14 @@ def watch(config: Config, poll_interval: float = 5.0) -> None:
         Observer = None  # type: ignore
 
     if Observer is not None:
-        handler = FileSystemEventHandler()
-        original_on_any_event = handler.on_any_event
+        class _JsonlEventHandler(FileSystemEventHandler):
+            def on_any_event(self, event: Any) -> None:
+                paths = (event.src_path, getattr(event, "dest_path", ""))
+                if any(path.endswith(".jsonl") for path in paths):
+                    _safe_collect_once(config)
+                super().on_any_event(event)
 
-        def on_event(event: Any) -> None:
-            if event.src_path.endswith(".jsonl"):
-                _safe_collect_once(config)
-            original_on_any_event(event)
-
-        handler.on_any_event = on_event  # type: ignore[method-assign]
+        handler = _JsonlEventHandler()
         observer = Observer()
         claude_dir = default_claude_dir()
         watch_dirs = {
@@ -55,6 +54,7 @@ def watch(config: Config, poll_interval: float = 5.0) -> None:
             watch_dir.mkdir(parents=True, exist_ok=True)
             observer.schedule(handler, str(watch_dir), recursive=True)
         observer.start()
+        _safe_collect_once(config)
         try:
             while True:
                 time.sleep(poll_interval)
