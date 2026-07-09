@@ -143,7 +143,7 @@ def test_fill_missing_costs_does_not_null_existing_cost_when_region_missing(
     tmp_path: Path,
 ) -> None:
     """region が NULL で cost が算出不能な行を処理しても、既存の cost_usd を
-    NULL で上書きしてはならない（region のみを埋める）。"""
+    NULL で上書きしてはならない(region のみを埋める)。"""
     from claude_meter.config import Config
     from claude_meter.cost import fill_missing_costs
     from claude_meter.db import get_connection, init_db
@@ -154,7 +154,7 @@ def test_fill_missing_costs_does_not_null_existing_cost_when_region_missing(
     _save_cached_pricing(config, load_fallback_pricing())
 
     # region が NULL、かつ未知モデルのため cost が再計算不能な行を挿入。
-    # cost_usd には既存の（何らかの経路で設定済みの）値を持たせておく。
+    # cost_usd には既存の(何らかの経路で設定済みの)値を持たせておく。
     with get_connection(config.storage.db_path) as conn:
         conn.execute(
             "INSERT INTO requests (timestamp, session_id, request_id, model, "
@@ -164,7 +164,7 @@ def test_fill_missing_costs_does_not_null_existing_cost_when_region_missing(
         conn.commit()
 
     updated = fill_missing_costs(config)
-    # cost は再計算できない（未知モデル）ため updated には数えない。
+    # cost は再計算できない(未知モデル)ため updated には数えない。
     assert updated == 0
 
     with get_connection(config.storage.db_path) as conn:
@@ -180,7 +180,7 @@ def test_fill_missing_costs_updates_cost_when_region_already_set(
     tmp_path: Path,
 ) -> None:
     """region が既に設定済みで cost_usd のみ NULL の行は、cost のみ更新され
-    updated に数えられる（elif cost is not None ブランチ）。"""
+    updated に数えられる(elif cost is not None ブランチ)。"""
     from claude_meter.config import Config
     from claude_meter.cost import fill_missing_costs
     from claude_meter.db import get_connection, init_db
@@ -267,7 +267,7 @@ def test_fill_missing_costs_skips_row_when_region_set_and_no_pricing(
     tmp_path: Path,
 ) -> None:
     """region が既に設定済みで cost_usd が NULL だが、価格情報が無く cost が
-    再計算できない行は更新もカウントもされない（書き込む意味がないためスキップ）。"""
+    再計算できない行は更新もカウントもされない(書き込む意味がないためスキップ)。"""
     from claude_meter.config import Config
     from claude_meter.cost import fill_missing_costs
     from claude_meter.db import get_connection, init_db

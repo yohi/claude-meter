@@ -28,7 +28,7 @@ def calculate_cost(
         return None
     def _component(tokens: int, price_per_1k: float | None) -> float | None:
         # 使用トークンが 0 のコンポーネントは価格未知でも影響しないので 0 を返す。
-        # トークンがあるのに価格が None の場合は、′30円’として過小計上しないよう None を返す。
+        # トークンがあるのに価格が None の場合は、0円として過小計上しないよう None を返す。
         if tokens <= 0:
             return 0.0
         if price_per_1k is None:
