@@ -24,7 +24,7 @@
 
 - **すべてのデータはローカルに保存する**
 - 外部への情報送信は行わない
-- 単価取得のみ AWS 公式 pricing JSON または `models.dev` から取得する（取得できない場合は内蔵単価表を使用）
+- 単価取得のみ `models.dev` または AWS 公式 pricing JSON から取得する（取得できない場合は内蔵単価表を使用）
 
 ## MUST / BETTER 対応表
 
@@ -36,7 +36,7 @@
 | キャッシュ読込入力トークン | 同上 `cache_read_input_tokens` | MUST |
 | 可視化 | Streamlit + SQLite によるローカル Web UI | MUST |
 | マルチ OS 対応 | Python 3.10+、Windows/macOS/Ubuntu で動作 | MUST |
-| 最新 Bedrock 単価取得 | AWS pricing JSON → `models.dev` → 内蔵フォールバック | MUST |
+| 最新 Bedrock 単価取得 | `models.dev` → AWS pricing JSON → 内蔵フォールバック | MUST |
 | 入出力プロンプト | `~/.claude/transcripts/*.jsonl` から紐付けて保存 | BETTER |
 | プロジェクト名 | `cwd` から `.git/config` またはディレクトリ名を導出 | BETTER |
 | 時刻 | `assistant.timestamp`（ISO 8601）を保存 | BETTER |
@@ -183,17 +183,19 @@ CREATE TABLE daily_summary (
 
 ### 取得元の優先順位
 
-1. **AWS 公式 Pricing JSON**
-   - URL: `https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/`
+1. **`models.dev` API**（主ソース）
+   - URL: `https://models.dev/api.json`
+   - Bedrock の ARN 形式モデル ID（`anthropic.claude-...`）と per-1M-token 単価を返すため、ClaudeCode のモデル名と確実に突き合わせられる
    - IAM 権限不要
    - 取得間隔：デフォルト 24 時間
 
-2. **`models.dev` API**
-   - URL: `https://models.dev/providers/amazon-bedrock/`
-   - AWS 公式 JSON が取得できない場合のフォールバック
+2. **AWS 公式 Pricing JSON**（補助）
+   - URL: `https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/index.json`
+   - IAM 権限不要だが、属性のモデル名が human-readable（例: "Claude 2.1"）で ARN 形式でないため ClaudeCode のモデル名と一致しにくい。ARN 形式キーを含む場合のみ採用する
+   - `models.dev` が取得できない場合のフォールバック
 
 3. **内蔵フォールバック単価表**
-   - ツールに同梱された JSON/YAML
+   - ツールに同梱された JSON（`pricing_fallback.json`）
    - 外部通信不可の環境で使用
 
 ### 単価キャッシュ
@@ -280,8 +282,8 @@ storage:
   db_path: "~/.claude-meter/data.db"
 
 pricing:
-  primary_source: "aws_bedrock_json"
-  fallback_source: "models_dev"
+  primary_source: "models_dev"
+  fallback_source: "aws_bedrock_json"
   cache_ttl_hours: 24
 
 privacy:
