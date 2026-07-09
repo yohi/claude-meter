@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import tempfile
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -101,17 +102,39 @@ def _save_cached_pricing(config: Config, records: list[PricingRecord]) -> None:
     meta = _cache_meta_path(config)
     cache.parent.mkdir(parents=True, exist_ok=True)
     # tmpファイルに書いてから os.replace でアトミックに差し替える。中途のクラッシュにより
-    # 半端な JSON/YAML が残らないようにする。
-    cache_tmp = cache.with_name(cache.name + ".tmp")
-    meta_tmp = meta.with_name(meta.name + ".tmp")
-    cache_tmp.write_text(
-        json.dumps([r.model_dump(mode="json") for r in records], indent=2),
-        encoding="utf-8",
-    )
-    now = datetime.now(timezone.utc).isoformat()
-    meta_tmp.write_text(yaml.safe_dump({"updated_at": now}), encoding="utf-8")
-    os.replace(cache_tmp, cache)
-    os.replace(meta_tmp, meta)
+    # 半端なJSON/YAMLが残らないようにする。並行実行(CLI/UI/watcherの同時起動)で固定名の
+    # tmpファイルが衝突しないよう、tempfileで呼び出しごとに一意なファイル名を生成する。
+    cache_tmp: Path | None = None
+    meta_tmp: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=cache.parent,
+            prefix=f"{cache.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as f:
+            cache_tmp = Path(f.name)
+            f.write(json.dumps([r.model_dump(mode="json") for r in records], indent=2))
+        now = datetime.now(timezone.utc).isoformat()
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=meta.parent,
+            prefix=f"{meta.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as f:
+            meta_tmp = Path(f.name)
+            f.write(yaml.safe_dump({"updated_at": now}))
+        os.replace(cache_tmp, cache)
+        os.replace(meta_tmp, meta)
+    finally:
+        if cache_tmp is not None:
+            cache_tmp.unlink(missing_ok=True)
+        if meta_tmp is not None:
+            meta_tmp.unlink(missing_ok=True)
 
 
 def upsert_pricing_table(config: Config, records: list[PricingRecord]) -> None:

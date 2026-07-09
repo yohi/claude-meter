@@ -41,6 +41,27 @@ def test_update_pricing_uses_cache_when_fresh(temp_home: Path) -> None:
     assert result[0].input_price_per_1k == 1.0
 
 
+def test_save_cached_pricing_leaves_no_leftover_tmp_files(temp_home: Path) -> None:
+    """_save_cached_pricing は呼び出しごとに一意な一時ファイル名を使うため、並行実行でも固定名
+    ファイルの衝突は発生しない。正常終了後、.tmp ファイルが残らないことを確認する。"""
+    from claude_meter.db import init_db
+    from claude_meter.pricing import _cache_meta_path, _cache_path, _save_cached_pricing
+
+    config = Config()
+    init_db(config.storage.db_path)
+    records = [PricingRecord(model="m", region="us-east-1", input_price_per_1k=1.0)]
+
+    _save_cached_pricing(config, records)
+
+    cache = _cache_path(config)
+    meta = _cache_meta_path(config)
+    assert cache.exists()
+    assert meta.exists()
+    # 一時ファイル(*.tmp)はクリーアコーンされて残らないこと。
+    assert list(cache.parent.glob(f"{cache.name}.*.tmp")) == []
+    assert list(meta.parent.glob(f"{meta.name}.*.tmp")) == []
+
+
 def test_fetch_models_dev_parses_and_converts(monkeypatch: pytest.MonkeyPatch) -> None:
     from claude_meter import pricing
 
