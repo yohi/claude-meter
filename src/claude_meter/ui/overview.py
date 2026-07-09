@@ -11,6 +11,7 @@ import streamlit as st
 
 from claude_meter.db import get_connection
 from claude_meter.config import load_config
+from claude_meter.model_normalizer import display_model_name
 
 
 def _summary_for_period(conn: sqlite3.Connection, start: str, end: str) -> dict[str, Any]:
@@ -156,6 +157,8 @@ def render() -> None:
 
         models = _model_tokens(conn, start, end)
         if not models.empty:
+            models["model"] = models["model"].apply(lambda model: display_model_name(str(model)))
+            models = models.groupby("model", as_index=False).agg(tokens=("tokens", "sum"))
             st.altair_chart(
                 alt.Chart(models)
                 .mark_arc()

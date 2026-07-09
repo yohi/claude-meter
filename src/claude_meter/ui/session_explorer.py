@@ -8,6 +8,7 @@ import streamlit as st
 
 from claude_meter.config import load_config
 from claude_meter.db import get_connection
+from claude_meter.model_normalizer import display_model_name
 
 
 def _list_sessions(conn: sqlite3.Connection) -> pd.DataFrame:
@@ -68,6 +69,9 @@ def render() -> None:
             selected = st.selectbox("Session", sessions["session_id"].tolist())
             if selected:
                 requests_df = _session_requests(conn, selected, config.privacy.show_prompts_in_ui)
+                requests_df["model"] = requests_df["model"].apply(
+                    lambda model: display_model_name(str(model))
+                )
                 st.dataframe(requests_df, use_container_width=True)
                 if config.privacy.show_prompts_in_ui:
                     search = st.text_input("Search prompts/responses")
