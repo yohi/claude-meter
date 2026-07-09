@@ -31,8 +31,7 @@ def main() -> None:
 @main.command()
 def init() -> None:
     """Create config file and SQLite database."""
-    config = load_config()
-    init_db(config.storage.db_path)
+    config = _config_and_db()
     click.echo(f"Initialized: {config.storage.db_path}")
 
 
