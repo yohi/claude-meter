@@ -24,6 +24,23 @@ def _list_sessions(conn: sqlite3.Connection) -> pd.DataFrame:
     )
 
 
+# SQL queries for _session_requests
+_SESSION_REQUESTS_WITHOUT_TEXT = """SELECT timestamp, request_id, project, model,
+           input_tokens, output_tokens,
+           cache_creation_input_tokens, cache_read_input_tokens, cost_usd
+           FROM requests
+           WHERE session_id = ?
+           ORDER BY timestamp"""
+
+_SESSION_REQUESTS_WITH_TEXT = """SELECT timestamp, request_id, project, model,
+           input_tokens, output_tokens,
+           cache_creation_input_tokens, cache_read_input_tokens, cost_usd,
+           prompt_text, response_text
+           FROM requests
+           WHERE session_id = ?
+           ORDER BY timestamp"""
+
+
 def _session_requests(conn: sqlite3.Connection, session_id: str, show_prompts: bool) -> pd.DataFrame:
     col_names = [
         "timestamp", "request_id", "project", "model",
@@ -32,14 +49,10 @@ def _session_requests(conn: sqlite3.Connection, session_id: str, show_prompts: b
     ]
     if show_prompts:
         col_names += ["prompt_text", "response_text"]
-    columns = ", ".join(col_names)
-    rows = conn.execute(
-        f"""SELECT {columns}
-           FROM requests
-           WHERE session_id = ?
-           ORDER BY timestamp""",
-        (session_id,),
-    ).fetchall()
+        query = _SESSION_REQUESTS_WITH_TEXT
+    else:
+        query = _SESSION_REQUESTS_WITHOUT_TEXT
+    rows = conn.execute(query, (session_id,)).fetchall()
     return pd.DataFrame(rows, columns=col_names)
 
 

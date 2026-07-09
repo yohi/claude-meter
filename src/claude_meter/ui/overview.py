@@ -1,7 +1,7 @@
 """Overview dashboard page."""
 
 from contextlib import closing
-from datetime import date, timedelta
+from datetime import datetime, timedelta, timezone
 import sqlite3
 from typing import Any
 
@@ -83,19 +83,28 @@ def _daily_avg_response_time(conn: sqlite3.Connection, start: str, end: str) -> 
     return pd.DataFrame(rows, columns=["date", "avg_response_time_ms"])
 
 
+# SQL queries for _top_costly_prompts
+_TOP_COSTLY_PROMPTS_WITHOUT_TEXT = """SELECT timestamp, project, model, cost_usd
+           FROM requests
+           WHERE timestamp >= ? AND timestamp < ?
+           ORDER BY cost_usd DESC NULLS LAST
+           LIMIT ?"""
+
+_TOP_COSTLY_PROMPTS_WITH_TEXT = """SELECT timestamp, project, model, cost_usd, prompt_text
+           FROM requests
+           WHERE timestamp >= ? AND timestamp < ?
+           ORDER BY cost_usd DESC NULLS LAST
+           LIMIT ?"""
+
+
 def _top_costly_prompts(conn: sqlite3.Connection, start: str, end: str, show_prompts: bool, limit: int = 10) -> pd.DataFrame:
     column_names = ["timestamp", "project", "model", "cost_usd"]
     if show_prompts:
         column_names.append("prompt_text")
-    columns = ", ".join(column_names)
-    rows = conn.execute(
-        f"""SELECT {columns}
-           FROM requests
-           WHERE timestamp >= ? AND timestamp < ?
-           ORDER BY cost_usd DESC NULLS LAST
-           LIMIT ?""",
-        (start, end, limit),
-    ).fetchall()
+        query = _TOP_COSTLY_PROMPTS_WITH_TEXT
+    else:
+        query = _TOP_COSTLY_PROMPTS_WITHOUT_TEXT
+    rows = conn.execute(query, (start, end, limit)).fetchall()
     return pd.DataFrame(rows, columns=column_names)
 
 
@@ -103,19 +112,20 @@ def render() -> None:
     config = load_config()
     st.title("claude-meter Overview")
     period = st.selectbox("Period", ["Today", "Last 7 days", "Last 30 days", "Custom"])
+    today = datetime.now(timezone.utc).date()
     if period == "Today":
-        start = date.today().isoformat()
-        end = (date.today() + timedelta(days=1)).isoformat()
+        start = today.isoformat()
+        end = (today + timedelta(days=1)).isoformat()
     elif period == "Last 7 days":
-        start = (date.today() - timedelta(days=7)).isoformat()
-        end = (date.today() + timedelta(days=1)).isoformat()
+        start = (today - timedelta(days=6)).isoformat()
+        end = (today + timedelta(days=1)).isoformat()
     elif period == "Last 30 days":
-        start = (date.today() - timedelta(days=30)).isoformat()
-        end = (date.today() + timedelta(days=1)).isoformat()
+        start = (today - timedelta(days=29)).isoformat()
+        end = (today + timedelta(days=1)).isoformat()
     else:
         col1, col2 = st.columns(2)
-        start = str(col1.date_input("Start", date.today() - timedelta(days=7)))
-        end = str(col2.date_input("End", date.today()) + timedelta(days=1))
+        start = str(col1.date_input("Start", today - timedelta(days=6)))
+        end = str(col2.date_input("End", today) + timedelta(days=1))
 
     with closing(get_connection(config.storage.db_path)) as conn:
         summary = _summary_for_period(conn, start, end)
