@@ -37,14 +37,14 @@ def calculate_cost(
     return input_cost + output_cost + cache_creation_cost + cache_read_cost
 
 
-def _load_pricing_map(config: Config, region: str | None = None) -> dict[tuple[str, str], PricingRecord]:
+def _load_pricing_map(config: Config) -> dict[tuple[str, str], PricingRecord]:
     records = update_pricing(config)
     return {(r.model, r.region): r for r in records}
 
 
 def fill_missing_costs(config: Config, region: str | None = None) -> int:
     target_region = region or config.claude.region
-    pricing = _load_pricing_map(config, target_region)
+    pricing = _load_pricing_map(config)
     updated = 0
     with get_connection(config.storage.db_path) as conn:
         cursor = conn.execute(
@@ -67,15 +67,26 @@ def fill_missing_costs(config: Config, region: str | None = None) -> int:
             )
             cost = calculate_cost(record, pricing, row_region)
             if row["region"] is None:
-                conn.execute(
-                    "UPDATE requests SET cost_usd = ?, region = ? WHERE id = ?",
-                    (cost, row_region, row["id"]),
-                )
-            else:
+                if cost is not None:
+                    # region 未設定時は region を必ず埋める。cost が算出できれば併せて埋める。
+                    conn.execute(
+                        "UPDATE requests SET cost_usd = ?, region = ? WHERE id = ?",
+                        (cost, row_region, row["id"]),
+                    )
+                else:
+                    # cost が算出できない場合は region のみ埋める。既存の cost_usd を
+                    # NULL で上書きしないようにする。
+                    conn.execute(
+                        "UPDATE requests SET region = ? WHERE id = ?",
+                        (row_region, row["id"]),
+                    )
+            elif cost is not None:
+                # region は既にあるため cost のみ更新。cost が None なら書き込む意味がないのでスキップ。
                 conn.execute(
                     "UPDATE requests SET cost_usd = ? WHERE id = ?",
                     (cost, row["id"]),
                 )
-            updated += 1
+            if cost is not None:
+                updated += 1
         conn.commit()
     return updated

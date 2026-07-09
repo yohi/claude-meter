@@ -2,8 +2,12 @@
 
 from pathlib import Path
 
+import subprocess
+import sys
+
 import click
 
+from claude_meter.collector import parse_incremental
 from claude_meter.config import Config, load_config, resolve_config_path
 from claude_meter.cost import fill_missing_costs
 from claude_meter.db import init_db
@@ -18,7 +22,7 @@ def _config_and_db() -> Config:
 
 
 @click.group()
-@click.version_option(version="0.1.0")
+@click.version_option(package_name="claude-meter")
 def main() -> None:
     """Local ClaudeCode usage and cost analyzer."""
     pass
@@ -27,8 +31,7 @@ def main() -> None:
 @main.command()
 def init() -> None:
     """Create config file and SQLite database."""
-    config = load_config()
-    init_db(config.storage.db_path)
+    config = _config_and_db()
     click.echo(f"Initialized: {config.storage.db_path}")
 
 
@@ -36,7 +39,6 @@ def init() -> None:
 def collect() -> None:
     """Parse ClaudeCode JSONL logs once."""
     config = _config_and_db()
-    from claude_meter.collector import parse_incremental
     inserted = parse_incremental(config)
     fill_missing_costs(config)
     click.echo(f"Inserted {inserted} new records.")
@@ -71,20 +73,29 @@ def ui(port: int | None, host: str | None) -> None:
     config = load_config()
     ui_port = port or config.ui.port
     ui_host = host or config.ui.host
-    import streamlit.web.cli as stcli
-    import sys
-    sys.argv = [
-        "streamlit",
-        "run",
-        str(Path(__file__).resolve().parent / "ui" / "app.py"),
-        "--server.port",
-        str(ui_port),
-        "--server.address",
-        ui_host,
-        "--browser.gatherUsageStats",
-        "false",
-    ]
-    stcli.main()
+    try:
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "streamlit",
+                "run",
+                str(Path(__file__).resolve().parent / "ui" / "app.py"),
+                "--server.port",
+                str(ui_port),
+                "--server.address",
+                ui_host,
+                "--browser.gatherUsageStats",
+                "false",
+            ],
+            check=True,
+        )
+    except FileNotFoundError as exc:
+        click.echo("Failed to launch Streamlit. Is it installed?", err=True)
+        raise SystemExit(1) from exc
+    except subprocess.CalledProcessError as exc:
+        click.echo(f"Streamlit exited with code {exc.returncode}.", err=True)
+        raise SystemExit(exc.returncode) from exc
 
 
 @main.command(name="watch")

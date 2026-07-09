@@ -36,3 +36,18 @@ def test_pricing_update_force_monkeypatched(temp_home: Path, monkeypatch: pytest
     result = runner.invoke(main, ["pricing", "update", "--force"])
     assert result.exit_code == 0
     assert "Updated pricing for 2" in result.output
+
+
+def test_collect_inserts_records(temp_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_parse_incremental(config):
+        return 3
+
+    def fake_fill_missing_costs(config, region=None):
+        return 0
+
+    monkeypatch.setattr("claude_meter.cli.parse_incremental", fake_parse_incremental)
+    monkeypatch.setattr("claude_meter.cli.fill_missing_costs", fake_fill_missing_costs)
+    runner = CliRunner()
+    result = runner.invoke(main, ["collect"])
+    assert result.exit_code == 0
+    assert "Inserted 3 new records." in result.output

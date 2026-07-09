@@ -1,20 +1,30 @@
 """Filesystem watcher for live JSONL ingestion."""
 
+import logging
 import time
 from typing import Any
 
 from claude_meter.config import Config, default_claude_dir
 from claude_meter.cost import fill_missing_costs
-from claude_meter.db import init_db
+
+logger = logging.getLogger(__name__)
 
 
 def _collect_once(config: Config) -> int:
     from claude_meter.collector import parse_incremental
-    init_db(config.storage.db_path)
+
     inserted = parse_incremental(config)
     if inserted:
         fill_missing_costs(config)
     return inserted
+
+
+def _safe_collect_once(config: Config) -> int:
+    try:
+        return _collect_once(config)
+    except Exception:
+        logger.exception("Failed to collect ClaudeCode logs")
+        return 0
 
 
 def watch(config: Config, poll_interval: float = 5.0) -> None:
@@ -26,16 +36,14 @@ def watch(config: Config, poll_interval: float = 5.0) -> None:
         Observer = None  # type: ignore
 
     if Observer is not None:
-        handler = FileSystemEventHandler()
-        original_on_any_event = handler.on_any_event
+        class _JsonlEventHandler(FileSystemEventHandler):
+            def on_any_event(self, event: Any) -> None:
+                paths = (event.src_path, getattr(event, "dest_path", ""))
+                if any(path.endswith(".jsonl") for path in paths):
+                    _safe_collect_once(config)
+                super().on_any_event(event)
 
-        def on_event(event: Any) -> None:
-            if event.src_path.endswith(".jsonl"):
-                _collect_once(config)
-            if original_on_any_event is not None:
-                original_on_any_event(event)
-
-        handler.on_any_event = on_event  # type: ignore[method-assign]
+        handler = _JsonlEventHandler()
         observer = Observer()
         claude_dir = default_claude_dir()
         watch_dirs = {
@@ -46,6 +54,7 @@ def watch(config: Config, poll_interval: float = 5.0) -> None:
             watch_dir.mkdir(parents=True, exist_ok=True)
             observer.schedule(handler, str(watch_dir), recursive=True)
         observer.start()
+        _safe_collect_once(config)
         try:
             while True:
                 time.sleep(poll_interval)
@@ -54,5 +63,5 @@ def watch(config: Config, poll_interval: float = 5.0) -> None:
             observer.join()
     else:
         while True:
-            _collect_once(config)
+            _safe_collect_once(config)
             time.sleep(poll_interval)

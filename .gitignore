@@ -15,3 +15,6 @@ __pycache__/
 
 # Local data and config
 .claude-meter/
+
+# Git worktrees (isolated implementation workspaces)
+.worktrees/

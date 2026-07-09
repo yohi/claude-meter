@@ -72,10 +72,13 @@ def derive_project(cwd: str) -> tuple[str | None, str | None]:
     path = Path(cwd)
     project = path.name or None
     repo: str | None = None
-    for parent in [path] + list(path.parents):
+    for parent in (path, *path.parents):
         git_config = parent / ".git" / "config"
         if git_config.exists():
-            text = git_config.read_text(encoding="utf-8")
+            try:
+                text = git_config.read_text(encoding="utf-8")
+            except OSError:
+                break
             m = re.search(r"url\s*=\s*(.+)", text)
             if m:
                 raw_url = m.group(1).strip()
@@ -101,7 +104,11 @@ def _load_transcripts(config: Config) -> dict[tuple[str, str | None], tuple[str,
         return {}
     pairs: dict[tuple[str, str | None], tuple[str, str, datetime]] = {}
     for file_path in sorted(base.glob("*.jsonl")):
-        with file_path.open("r", encoding="utf-8") as f:
+        try:
+            fh = file_path.open("r", encoding="utf-8")
+        except OSError:
+            continue
+        with fh as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -154,15 +161,22 @@ def _compute_response_time(
 def parse_incremental(config: Config) -> int:
     files = collect_files(config)
     history_hints = load_history_project_hints(config)
-    transcripts = _load_transcripts(config) if config.privacy.store_prompts else {}
+    transcripts = _load_transcripts(config)
     inserted = 0
     with get_connection(config.storage.db_path) as conn:
         for file_path in files:
-            current_size = file_path.stat().st_size
+            try:
+                current_size = file_path.stat().st_size
+            except OSError:
+                continue
             start_line, last_size = _read_sync_state(conn, file_path)
             if last_size is not None and current_size < last_size:
                 start_line = 0
-            with file_path.open("r", encoding="utf-8") as f:
+            try:
+                fh = file_path.open("r", encoding="utf-8")
+            except OSError:
+                continue
+            with fh as f:
                 line_no = start_line
                 for line_no, line in enumerate(f, start=1):
                     if line_no <= start_line:
@@ -204,15 +218,21 @@ def parse_incremental(config: Config) -> int:
                         cache_read_input_tokens=usage.get("cache_read_input_tokens", 0) or 0,
                         source_file=file_path,
                     )
-                    if config.privacy.store_prompts:
-                        key = (rec.session_id, rec.request_id)
-                        pair = transcripts.get(key)
-                        if pair is not None:
+                    # Transcript matching must use the raw requestId (which may be
+                    # None) because `_load_transcripts` keys its dict the same way.
+                    # The synthesized `rec.request_id` above only exists to satisfy
+                    # the DB's NOT NULL/UNIQUE(session_id, request_id) constraint and
+                    # would never match a transcript entry.
+                    raw_request_id = record.get("requestId")
+                    key = (rec.session_id, raw_request_id)
+                    pair = transcripts.get(key)
+                    if pair is not None:
+                        rec.response_time_ms = _compute_response_time(
+                            rec.session_id, raw_request_id, rec.timestamp, transcripts
+                        )
+                        if config.privacy.store_prompts:
                             rec.prompt_text = pair[0][: config.privacy.max_prompt_length]
-                            rec.response_text = pair[1][: config.privacy.max_prompt_length]
-                            rec.response_time_ms = _compute_response_time(
-                                rec.session_id, rec.request_id, rec.timestamp, transcripts
-                            )
+                            rec.response_text = pair[1][: config.privacy.max_response_length]
                     _insert_usage(conn, rec)
                     inserted += 1
             _update_sync_state(conn, file_path, current_size, line_no)
