@@ -219,6 +219,50 @@ def test_fill_missing_costs_updates_cost_when_region_already_set(
         assert row["region"] == "us-east-1"
 
 
+def test_fill_missing_costs_preserves_existing_cost_when_recalculable(
+    tmp_path: Path,
+) -> None:
+    """region が NULL ですでに cost_usd が設定済みの行は、既知モデルで価格が再計算
+    可能であっても、既存の cost_usd を上書きしてはならない(region のみを埋める)。"""
+    from claude_meter.config import Config
+    from claude_meter.cost import fill_missing_costs
+    from claude_meter.db import get_connection, init_db
+    from claude_meter.pricing import _save_cached_pricing, load_fallback_pricing
+
+    config = Config(storage={"db_path": str(tmp_path / "data.db")})
+    init_db(config.storage.db_path)
+    _save_cached_pricing(config, load_fallback_pricing())
+
+    # region が NULL だが、既存の cost_usd がある行を挿入(既知モデルのため再計算は可能)。
+    with get_connection(config.storage.db_path) as conn:
+        conn.execute(
+            "INSERT INTO requests (timestamp, session_id, request_id, model, "
+            "input_tokens, output_tokens, cost_usd) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                "2026-07-08T10:00:00Z",
+                "s",
+                "r",
+                "claude-sonnet-4-5-20260701",
+                1000,
+                500,
+                999.99,
+            ),
+        )
+        conn.commit()
+
+    updated = fill_missing_costs(config)
+    # 既存の cost_usd があるため updated には数えない。
+    assert updated == 0
+
+    with get_connection(config.storage.db_path) as conn:
+        cursor = conn.execute("SELECT cost_usd, region FROM requests WHERE id = 1")
+        row = cursor.fetchone()
+        assert row is not None
+        # region は埋まるが、既存の cost_usd(再計算値 0.0105 ではなく 999.99)は保持される。
+        assert row["region"] == "us-east-1"
+        assert row["cost_usd"] == pytest.approx(999.99)
+
+
 def test_fill_missing_costs_skips_row_when_region_set_and_no_pricing(
     tmp_path: Path,
 ) -> None:

@@ -64,7 +64,8 @@ def fill_missing_costs(config: Config, region: str | None = None) -> int:
     updated = 0
     with get_connection(config.storage.db_path) as conn:
         cursor = conn.execute(
-            "SELECT id, model, region, input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens "
+            "SELECT id, model, region, cost_usd, input_tokens, output_tokens, "
+            "cache_creation_input_tokens, cache_read_input_tokens "
             "FROM requests WHERE cost_usd IS NULL OR region IS NULL"
         )
         rows = cursor.fetchall()
@@ -82,27 +83,29 @@ def fill_missing_costs(config: Config, region: str | None = None) -> int:
                 source_file=Path("."),
             )
             cost = calculate_cost(record, pricing, row_region)
+            cost_missing = row["cost_usd"] is None
             if row["region"] is None:
-                if cost is not None:
-                    # region 未設定時は region を必ず埋める。cost が算出できれば併せて埋める。
+                if cost_missing and cost is not None:
+                    # region 未設定時は region を必ず埋める。cost が未設定かつ算出できれば併せて埋める。
                     conn.execute(
                         "UPDATE requests SET cost_usd = ?, region = ? WHERE id = ?",
                         (cost, row_region, row["id"]),
                     )
                 else:
-                    # cost が算出できない場合は region のみ埋める。既存の cost_usd を
-                    # NULL で上書きしないようにする。
+                    # cost が既存、または算出できない場合は region のみ埋める。既存の
+                    # cost_usd を上書きしないようにする。
                     conn.execute(
                         "UPDATE requests SET region = ? WHERE id = ?",
                         (row_region, row["id"]),
                     )
-            elif cost is not None:
-                # region は既にあるため cost のみ更新。cost が None なら書き込む意味がないのでスキップ。
+            elif cost_missing and cost is not None:
+                # region は既にあるため cost のみ更新。cost が既存、または None なら
+                # 書き込む意味がないのでスキップ。
                 conn.execute(
                     "UPDATE requests SET cost_usd = ? WHERE id = ?",
                     (cost, row["id"]),
                 )
-            if cost is not None:
+            if cost_missing and cost is not None:
                 updated += 1
         conn.commit()
     return updated
