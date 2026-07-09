@@ -5,6 +5,7 @@ import logging
 import os
 import tempfile
 from collections.abc import Callable
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -93,7 +94,8 @@ def _load_cached_pricing(config: Config) -> list[PricingRecord] | None:
             return None
         data = json.loads(cache.read_text(encoding="utf-8"))
         return [PricingRecord.model_validate(r) for r in data]
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed to load cached pricing from %s: %s", cache, exc)
         return None
 
 
@@ -139,7 +141,7 @@ def _save_cached_pricing(config: Config, records: list[PricingRecord]) -> None:
 
 def upsert_pricing_table(config: Config, records: list[PricingRecord]) -> None:
     """Persist pricing records to the SQLite pricing table."""
-    with get_connection(config.storage.db_path) as conn:
+    with closing(get_connection(config.storage.db_path)) as conn:
         conn.executemany(
             """INSERT INTO pricing (
                 model, region, input_price_per_1k, output_price_per_1k,
