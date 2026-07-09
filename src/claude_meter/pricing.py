@@ -120,10 +120,24 @@ def load_pricing_overrides(config: Config) -> list[PricingRecord]:
 def save_pricing_overrides(config: Config, records: list[PricingRecord]) -> None:
     path = _override_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps([record.model_dump(mode="json") for record in records], indent=2),
-        encoding="utf-8",
-    )
+    # 直接上書きすると書き込み中断時にファイルが破損するため、tempfile + os.replace
+    # でアトミックに差し替える。_save_cached_pricing と同じ方式。
+    tmp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f"{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as f:
+            tmp_path = Path(f.name)
+            f.write(json.dumps([record.model_dump(mode="json") for record in records], indent=2))
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
 
 
 def _merge_pricing_records(
