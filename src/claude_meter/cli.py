@@ -102,7 +102,9 @@ def ui(port: int | None, host: str | None) -> None:
 
 
 @main.command(name="watch")
-@click.option("--poll", default=5.0, help="Polling interval in seconds (fallback when watchdog unavailable).")
+@click.option(
+    "--poll", default=5.0, help="Polling interval in seconds (fallback when watchdog unavailable)."
+)
 def watch_cmd(poll: float) -> None:
     """Watch ~/.claude for new JSONL data."""
     config = _config_and_db()

@@ -133,7 +133,9 @@ def test_update_pricing_uses_stale_cache_when_all_sources_fail(
     ]
     _save_cached_pricing(config, cached)
     _cache_meta_path().write_text(
-        yaml.safe_dump({"updated_at": (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()}),
+        yaml.safe_dump(
+            {"updated_at": (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()}
+        ),
         encoding="utf-8",
     )
     monkeypatch.setitem(pricing._FETCHERS_BY_SOURCE, "models_dev", lambda: [])
@@ -286,7 +288,8 @@ def test_fetch_aws_bedrock_json_classifies_cache_before_input_output(
 
 
 def test_update_pricing_skips_source_without_arn_style_keys(
-    temp_home: Path, monkeypatch: pytest.MonkeyPatch,
+    temp_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A fetcher returning non-empty but non-ARN-style keys (e.g. human-readable
     AWS model names) must be rejected so update_pricing falls through to the
@@ -300,7 +303,13 @@ def test_update_pricing_skips_source_without_arn_style_keys(
     init_db(config.storage.db_path)
 
     unusable = [PricingRecord(model="Claude 2.1", region="us-east-1", input_price_per_1k=1.0)]
-    usable = [PricingRecord(model="anthropic.claude-3-haiku-20240307-v1:0", region="us-east-1", input_price_per_1k=2.0)]
+    usable = [
+        PricingRecord(
+            model="anthropic.claude-3-haiku-20240307-v1:0",
+            region="us-east-1",
+            input_price_per_1k=2.0,
+        )
+    ]
     monkeypatch.setattr(pricing, "fetch_aws_bedrock_json", lambda: unusable)
     monkeypatch.setattr(pricing, "fetch_models_dev", lambda: usable)
     monkeypatch.setitem(pricing._FETCHERS_BY_SOURCE, "aws_bedrock_json", lambda: unusable)

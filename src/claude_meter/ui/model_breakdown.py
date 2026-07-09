@@ -11,6 +11,7 @@ from claude_meter.config import load_config
 from claude_meter.db import get_connection
 from claude_meter.model_normalizer import display_model_name
 
+
 def _model_summary(conn: sqlite3.Connection) -> pd.DataFrame:
     rows = conn.execute(
         """SELECT model,

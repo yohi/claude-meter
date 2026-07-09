@@ -78,9 +78,7 @@ def load_config(path: Path | None = None) -> Config:
         try:
             raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         except yaml.YAMLError as e:
-            raise ValueError(
-                f"Invalid YAML in config file {config_path}: {e}"
-            ) from e
+            raise ValueError(f"Invalid YAML in config file {config_path}: {e}") from e
         return Config.model_validate(raw or {})
     return Config()
 

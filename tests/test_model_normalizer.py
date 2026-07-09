@@ -11,7 +11,10 @@ def test_normalize_claude_code_internal_name() -> None:
 
 
 def test_normalize_arn_is_unchanged() -> None:
-    assert normalize_model_name("anthropic.claude-3-5-sonnet-20241022-v2:0") == "anthropic.claude-3-5-sonnet-20241022-v2:0"
+    assert (
+        normalize_model_name("anthropic.claude-3-5-sonnet-20241022-v2:0")
+        == "anthropic.claude-3-5-sonnet-20241022-v2:0"
+    )
 
 
 def test_unknown_model_returns_none() -> None:

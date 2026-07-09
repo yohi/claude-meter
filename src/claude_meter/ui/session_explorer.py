@@ -42,11 +42,19 @@ _SESSION_REQUESTS_WITH_TEXT = """SELECT timestamp, request_id, project, model,
            ORDER BY timestamp"""
 
 
-def _session_requests(conn: sqlite3.Connection, session_id: str, show_prompts: bool) -> pd.DataFrame:
+def _session_requests(
+    conn: sqlite3.Connection, session_id: str, show_prompts: bool
+) -> pd.DataFrame:
     col_names = [
-        "timestamp", "request_id", "project", "model",
-        "input_tokens", "output_tokens",
-        "cache_creation_input_tokens", "cache_read_input_tokens", "cost_usd",
+        "timestamp",
+        "request_id",
+        "project",
+        "model",
+        "input_tokens",
+        "output_tokens",
+        "cache_creation_input_tokens",
+        "cache_read_input_tokens",
+        "cost_usd",
     ]
     if show_prompts:
         col_names += ["prompt_text", "response_text"]
@@ -76,8 +84,9 @@ def render() -> None:
                 if config.privacy.show_prompts_in_ui:
                     search = st.text_input("Search prompts/responses")
                     if search:
-                        mask = (
-                            requests_df["prompt_text"].str.contains(search, na=False, case=False, regex=False)
-                            | requests_df["response_text"].str.contains(search, na=False, case=False, regex=False)
+                        mask = requests_df["prompt_text"].str.contains(
+                            search, na=False, case=False, regex=False
+                        ) | requests_df["response_text"].str.contains(
+                            search, na=False, case=False, regex=False
                         )
                         st.dataframe(requests_df[mask], use_container_width=True)

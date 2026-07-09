@@ -47,16 +47,22 @@ def test_derive_project_from_git_dir(tmp_path: Path) -> None:
     git_dir = project_dir / ".git"
     git_dir.mkdir()
     config_file = git_dir / "config"
-    config_file.write_text("""[remote "origin"]
+    config_file.write_text(
+        """[remote "origin"]
         url = git@github.com:example/my-project.git
-    """, encoding="utf-8")
+    """,
+        encoding="utf-8",
+    )
     project, repo = derive_project(str(project_dir))
     assert project == "my-project"
     assert repo == "example/my-project"
 
 
-def test_response_time_computed_from_transcript(temp_home: Path, sample_project_jsonl: Path, sample_transcript_jsonl: Path) -> None:
+def test_response_time_computed_from_transcript(
+    temp_home: Path, sample_project_jsonl: Path, sample_transcript_jsonl: Path
+) -> None:
     from claude_meter.collector import _load_transcripts, _compute_response_time, _parse_iso_ts
+
     config = load_config()
     transcripts = _load_transcripts(config)
     key = ("sess-001", "req-001")
@@ -64,7 +70,9 @@ def test_response_time_computed_from_transcript(temp_home: Path, sample_project_
     prompt_text, response_text, _ = transcripts[key]
     assert prompt_text == "hello"
     assert response_text == "world"
-    duration = _compute_response_time("sess-001", "req-001", _parse_iso_ts("2026-07-08T10:00:00.000Z"), transcripts)
+    duration = _compute_response_time(
+        "sess-001", "req-001", _parse_iso_ts("2026-07-08T10:00:00.000Z"), transcripts
+    )
     assert duration == 2000
 
 
@@ -243,9 +251,7 @@ def test_parse_incremental_survives_unreadable_file(temp_home: Path) -> None:
     inserted = parse_incremental(config)  # must NOT raise
     assert inserted == 1  # only good.jsonl inserted; bad.jsonl skipped
     with closing(get_connection(config.storage.db_path)) as conn:
-        row = conn.execute(
-            "SELECT request_id FROM requests WHERE session_id = 's-good'"
-        ).fetchone()
+        row = conn.execute("SELECT request_id FROM requests WHERE session_id = 's-good'").fetchone()
         assert row is not None
         assert row["request_id"] == "req-good"
         # the skipped file must not leave a partial sync_state entry
@@ -291,9 +297,12 @@ def test_collect_survives_null_or_non_string_model(temp_home: Path) -> None:
         "message": None,
     }
     (projects / "s-null.jsonl").write_text(
-        json.dumps(rec_null_model) + "\n"
-        + json.dumps(rec_numeric_model) + "\n"
-        + json.dumps(rec_null_message) + "\n",
+        json.dumps(rec_null_model)
+        + "\n"
+        + json.dumps(rec_numeric_model)
+        + "\n"
+        + json.dumps(rec_null_message)
+        + "\n",
         encoding="utf-8",
     )
 

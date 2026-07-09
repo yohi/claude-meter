@@ -98,7 +98,9 @@ _TOP_COSTLY_PROMPTS_WITH_TEXT = """SELECT timestamp, project, model, cost_usd, p
            LIMIT ?"""
 
 
-def _top_costly_prompts(conn: sqlite3.Connection, start: str, end: str, show_prompts: bool, limit: int = 10) -> pd.DataFrame:
+def _top_costly_prompts(
+    conn: sqlite3.Connection, start: str, end: str, show_prompts: bool, limit: int = 10
+) -> pd.DataFrame:
     column_names = ["timestamp", "project", "model", "cost_usd"]
     if show_prompts:
         column_names.append("prompt_text")
