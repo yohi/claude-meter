@@ -234,3 +234,64 @@ def test_parse_incremental_survives_unreadable_file(temp_home: Path) -> None:
             (str(projects / "bad.jsonl"),),
         ).fetchone()
         assert bad_state is None
+
+
+def test_collect_survives_null_or_non_string_model(temp_home: Path) -> None:
+    """message.model が null / 数値 / message 自体が非dict でも normalize_model_name()
+    の AttributeError で例外終了せず、'unknown' として取り込みを継続すること。"""
+    from contextlib import closing
+    from claude_meter.db import get_connection
+
+    config = load_config()
+    init_db(config.storage.db_path)
+    projects = temp_home / ".claude" / "projects" / "demo"
+    projects.mkdir(parents=True)
+    rec_null_model = {
+        "type": "assistant",
+        "timestamp": "2026-07-08T10:00:00Z",
+        "cwd": "/x",
+        "sessionId": "s-null",
+        "requestId": "req-null",
+        "message": {"model": None, "usage": {"input_tokens": 1}},
+    }
+    rec_numeric_model = {
+        "type": "assistant",
+        "timestamp": "2026-07-08T10:00:01Z",
+        "cwd": "/x",
+        "sessionId": "s-null",
+        "requestId": "req-numeric",
+        "message": {"model": 123, "usage": {"input_tokens": 2}},
+    }
+    rec_null_message = {
+        "type": "assistant",
+        "timestamp": "2026-07-08T10:00:02Z",
+        "cwd": "/x",
+        "sessionId": "s-null",
+        "requestId": "req-nullmsg",
+        "message": None,
+    }
+    (projects / "s-null.jsonl").write_text(
+        json.dumps(rec_null_model) + "\n"
+        + json.dumps(rec_numeric_model) + "\n"
+        + json.dumps(rec_null_message) + "\n",
+        encoding="utf-8",
+    )
+
+    inserted = parse_incremental(config)  # must NOT raise
+    assert inserted == 3
+    with closing(get_connection(config.storage.db_path)) as conn:
+        rows = {
+            row["request_id"]: row["model"]
+            for row in conn.execute(
+                "SELECT request_id, model FROM requests WHERE session_id = 's-null'"
+            ).fetchall()
+        }
+        assert rows["req-null"] == "unknown"
+        assert rows["req-numeric"] == "unknown"
+        assert rows["req-nullmsg"] == "unknown"
+        # sync_state must have advanced past all 3 lines, not stalled on the crash.
+        state = conn.execute(
+            "SELECT last_line FROM sync_state WHERE file_path = ?",
+            (str(projects / "s-null.jsonl"),),
+        ).fetchone()
+        assert state["last_line"] == 3

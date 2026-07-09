@@ -197,8 +197,15 @@ def parse_incremental(config: Config) -> int:
                         timestamp = _parse_iso_ts(ts_raw)
                     except (ValueError, TypeError):
                         continue
-                    usage = record.get("message", {}).get("usage", {})
-                    model = record.get("message", {}).get("model", "unknown")
+                    message = record.get("message")
+                    if not isinstance(message, dict):
+                        message = {}
+                    usage = message.get("usage")
+                    if not isinstance(usage, dict):
+                        usage = {}
+                    model = message.get("model", "unknown")
+                    if not isinstance(model, str) or not model:
+                        model = "unknown"
                     if normalize_model_name(model) is None:
                         # still store the raw model so users see the row
                         pass
