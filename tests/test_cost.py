@@ -302,3 +302,51 @@ def test_fill_missing_costs_skips_row_when_region_set_and_no_pricing(
         assert row is not None
         assert row["cost_usd"] is None
         assert row["region"] == "us-east-1"
+
+
+def test_calculate_cost_matches_models_dev_region_prefixed_pricing() -> None:
+    """models.dev 由来の region 接頭辞付きキー(eu.anthropic...)でも、非us region で
+    キャノニカル照合により単価を引き当てられること(乖離1の回帰)。"""
+    record = UsageRecord(
+        timestamp=datetime.now(timezone.utc),
+        session_id="s",
+        request_id="r",
+        model="claude-haiku-4-5-20251001",
+        input_tokens=1000,
+        output_tokens=500,
+        source_file=Path("x"),
+    )
+    pricing = {
+        ("eu.anthropic.claude-haiku-4-5-20251001-v1:0", "eu-west-1"): PricingRecord(
+            model="eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+            region="eu-west-1",
+            input_price_per_1k=0.0008,
+            output_price_per_1k=0.004,
+        )
+    }
+    cost = calculate_cost(record, pricing, "eu-west-1")
+    assert cost == pytest.approx(1000 * 0.0008 / 1000 + 500 * 0.004 / 1000)
+
+
+def test_calculate_cost_prices_current_model_absent_from_whitelist() -> None:
+    """fallback JSON 未登録の現行モデル(claude-sonnet-4-5-20250929)でも、models.dev 由来
+    の ARN 単価にキャノニカル照合できること(乖離2の回帰)。"""
+    record = UsageRecord(
+        timestamp=datetime.now(timezone.utc),
+        session_id="s",
+        request_id="r",
+        model="claude-sonnet-4-5-20250929",
+        input_tokens=1000,
+        output_tokens=500,
+        source_file=Path("x"),
+    )
+    pricing = {
+        ("anthropic.claude-sonnet-4-5-20250929-v1:0", "us-east-1"): PricingRecord(
+            model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+            region="us-east-1",
+            input_price_per_1k=0.003,
+            output_price_per_1k=0.015,
+        )
+    }
+    cost = calculate_cost(record, pricing, "us-east-1")
+    assert cost == pytest.approx(1000 * 0.003 / 1000 + 500 * 0.015 / 1000)

@@ -5,7 +5,11 @@ from pathlib import Path
 
 from claude_meter.config import Config
 from claude_meter.db import get_connection
-from claude_meter.model_normalizer import model_to_arn_keys, normalize_model_name
+from claude_meter.model_normalizer import (
+    canonical_model_key,
+    model_to_arn_keys,
+    normalize_model_name,
+)
 from claude_meter.models import PricingRecord, UsageRecord
 from claude_meter.pricing import update_pricing
 
@@ -24,6 +28,16 @@ def calculate_cost(
         price = pricing.get((key, region))
         if price is not None:
             break
+    if price is None:
+        # Canonical fallback: exact ARN keys can miss when pricing comes from
+        # models.dev (region-prefixed ids like "eu.anthropic.claude-...") or when
+        # the model is absent from the built-in whitelist. Match on a
+        # prefix/version-stripped core key within the same region.
+        target = canonical_model_key(record.model)
+        for (p_model, p_region), p_price in pricing.items():
+            if p_region == region and canonical_model_key(p_model) == target:
+                price = p_price
+                break
     if price is None:
         return None
     def _component(tokens: int, price_per_1k: float | None) -> float | None:
