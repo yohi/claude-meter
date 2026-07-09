@@ -39,6 +39,16 @@ def render() -> None:
         summary = _model_summary(conn)
         if not summary.empty:
             summary["model"] = summary["model"].apply(lambda model: display_model_name(str(model)))
+            summary = (
+                summary.groupby("model", as_index=False)
+                .agg(
+                    requests=("requests", "sum"),
+                    total_cost=("total_cost", "sum"),
+                    total_tokens=("total_tokens", "sum"),
+                )
+                .sort_values("total_cost", ascending=False, na_position="last")
+                .reset_index(drop=True)
+            )
         st.dataframe(summary, use_container_width=True)
         if not summary.empty:
             st.altair_chart(
