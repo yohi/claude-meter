@@ -40,6 +40,56 @@ def test_collect_once_idempotent(temp_home: Path, monkeypatch: pytest.MonkeyPatc
     assert _collect_once(config) == 0
 
 
+def test_collect_once_reprices_reprocessed_existing_record(temp_home: Path) -> None:
+    import json
+    from contextlib import closing
+
+    from claude_meter.db import get_connection
+    from claude_meter.pricing import _save_cached_pricing, load_fallback_pricing
+
+    config = Config(
+        claude={
+            "projects_dir": temp_home / "projects",
+            "transcripts_dir": temp_home / "transcripts",
+        },
+        storage={"db_path": temp_home / "data.db"},
+    )
+    init_db(config.storage.db_path)
+    _save_cached_pricing(config, load_fallback_pricing())
+
+    jsonl = temp_home / "projects" / "p" / "sess-1.jsonl"
+    jsonl.parent.mkdir(parents=True)
+    jsonl.write_text(
+        json.dumps(
+            {
+                "type": "assistant",
+                "timestamp": "2026-07-08T10:00:00Z",
+                "cwd": "/x",
+                "sessionId": "sess-1",
+                "requestId": "req-1",
+                "message": {
+                    "model": "claude-sonnet-4-5-20260701",
+                    "usage": {"input_tokens": 1000},
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert _collect_once(config) == 1
+    with closing(get_connection(config.storage.db_path)) as conn:
+        conn.execute("DELETE FROM sync_state")
+        conn.commit()
+
+    assert _collect_once(config) == 0
+    with closing(get_connection(config.storage.db_path)) as conn:
+        row = conn.execute("SELECT cost_usd, region FROM requests").fetchone()
+    assert row is not None
+    assert row["cost_usd"] is not None
+    assert row["region"] == "us-east-1"
+
+
 def test_watch_falls_back_to_polling_on_observer_failure(
     temp_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -1,5 +1,6 @@
 from claude_meter.model_normalizer import (
     canonical_model_key,
+    display_model_name,
     model_to_arn_keys,
     normalize_model_name,
 )
@@ -15,6 +16,10 @@ def test_normalize_arn_is_unchanged() -> None:
 
 def test_unknown_model_returns_none() -> None:
     assert normalize_model_name("totally-unknown-model-xyz") is None
+
+
+def test_display_model_name_replaces_unknown_model() -> None:
+    assert display_model_name("totally-unknown-model-xyz") == "Unknown model"
 
 
 def test_arn_keys_for_known_model() -> None:

@@ -14,7 +14,9 @@ def test_init_creates_db(temp_home: Path) -> None:
     result = runner.invoke(main, ["init"])
     assert result.exit_code == 0
     db_path = temp_home / ".claude-meter" / "data.db"
+    config_path = temp_home / ".claude-meter" / "config.yaml"
     assert db_path.exists()
+    assert config_path.exists()
 
 
 def test_config_shows_path(temp_home: Path) -> None:
