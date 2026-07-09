@@ -1,5 +1,6 @@
 """Overview dashboard page."""
 
+from contextlib import closing
 from datetime import date, timedelta
 import sqlite3
 from typing import Any
@@ -115,7 +116,7 @@ def render() -> None:
         start = str(col1.date_input("Start", date.today() - timedelta(days=7)))
         end = str(col2.date_input("End", date.today()) + timedelta(days=1))
 
-    with get_connection(config.storage.db_path) as conn:
+    with closing(get_connection(config.storage.db_path)) as conn:
         summary = _summary_for_period(conn, start, end)
         col1, col2, col3 = st.columns(3)
         col1.metric("Total Cost", f"${summary['total_cost']:.4f}")

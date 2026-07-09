@@ -1,5 +1,6 @@
 """Pricing settings page."""
 
+from contextlib import closing
 import sqlite3
 
 import pandas as pd
@@ -46,7 +47,7 @@ def render() -> None:
         update_pricing(config, force=True)
         st.success("Pricing refreshed.")
 
-    with get_connection(config.storage.db_path) as conn:
+    with closing(get_connection(config.storage.db_path)) as conn:
         pricing = _list_pricing(conn)
     st.subheader("Current Pricing")
     st.dataframe(pricing, use_container_width=True)

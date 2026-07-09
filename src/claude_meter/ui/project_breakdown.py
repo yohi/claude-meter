@@ -1,5 +1,6 @@
 """Project breakdown page."""
 
+from contextlib import closing
 import sqlite3
 
 import altair as alt
@@ -30,7 +31,7 @@ def _project_summary(conn: sqlite3.Connection) -> pd.DataFrame:
 def render() -> None:
     config = load_config()
     st.title("Project Breakdown")
-    with get_connection(config.storage.db_path) as conn:
+    with closing(get_connection(config.storage.db_path)) as conn:
         summary = _project_summary(conn)
         st.dataframe(summary, use_container_width=True)
         if not summary.empty:

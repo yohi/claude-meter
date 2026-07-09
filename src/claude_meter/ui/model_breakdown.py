@@ -1,5 +1,6 @@
 """Model breakdown page."""
 
+from contextlib import closing
 import sqlite3
 
 import altair as alt
@@ -37,7 +38,7 @@ def _model_summary(conn: sqlite3.Connection) -> pd.DataFrame:
 def render() -> None:
     config = load_config()
     st.title("Model Breakdown")
-    with get_connection(config.storage.db_path) as conn:
+    with closing(get_connection(config.storage.db_path)) as conn:
         summary = _model_summary(conn)
         if not summary.empty:
             unknown = summary["model"].apply(

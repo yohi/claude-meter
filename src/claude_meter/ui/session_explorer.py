@@ -1,5 +1,6 @@
 """Session explorer page."""
 
+from contextlib import closing
 import sqlite3
 
 import pandas as pd
@@ -45,7 +46,7 @@ def _session_requests(conn: sqlite3.Connection, session_id: str, show_prompts: b
 def render() -> None:
     config = load_config()
     st.title("Session Explorer")
-    with get_connection(config.storage.db_path) as conn:
+    with closing(get_connection(config.storage.db_path)) as conn:
         sessions = _list_sessions(conn)
         st.dataframe(sessions, use_container_width=True)
         if sessions.empty:
