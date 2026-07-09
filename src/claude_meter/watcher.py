@@ -35,7 +35,9 @@ def watch(config: Config, poll_interval: float = 5.0) -> None:
     except ImportError:
         Observer = None  # type: ignore
 
-    if Observer is not None:
+    use_observer = Observer is not None
+    observer: Any = None
+    if use_observer:
         class _JsonlEventHandler(FileSystemEventHandler):
             def on_any_event(self, event: Any) -> None:
                 paths = (event.src_path, getattr(event, "dest_path", ""))
@@ -50,10 +52,20 @@ def watch(config: Config, poll_interval: float = 5.0) -> None:
             config.claude.projects_dir or claude_dir / "projects",
             config.claude.transcripts_dir or claude_dir / "transcripts",
         }
-        for watch_dir in watch_dirs:
-            watch_dir.mkdir(parents=True, exist_ok=True)
-            observer.schedule(handler, str(watch_dir), recursive=True)
-        observer.start()
+        try:
+            for watch_dir in watch_dirs:
+                watch_dir.mkdir(parents=True, exist_ok=True)
+                observer.schedule(handler, str(watch_dir), recursive=True)
+            observer.start()
+        except Exception:
+            logger.exception("Failed to start filesystem watcher; falling back to polling")
+            use_observer = False
+            try:
+                observer.stop()
+            except Exception:
+                logger.debug("Observer stop after failed start raised", exc_info=True)
+
+    if use_observer:
         _safe_collect_once(config)
         try:
             while True:
