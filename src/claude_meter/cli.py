@@ -71,7 +71,7 @@ def config() -> None:
 def ui(port: int | None, host: str | None) -> None:
     """Launch the Streamlit UI."""
     config = _config_and_db()
-    ui_port = port or config.ui.port
+    ui_port = port if port is not None else config.ui.port
     ui_host = host or config.ui.host
     try:
         subprocess.run(

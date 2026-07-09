@@ -77,3 +77,20 @@ def test_ui_initializes_db_before_launch(temp_home: Path, monkeypatch: pytest.Mo
     with get_connection(db_path) as conn:
         # must not raise sqlite3.OperationalError: no such table: requests
         conn.execute("SELECT COUNT(*) FROM requests").fetchone()
+
+
+def test_watch_command_with_poll_interval(temp_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test watch command with custom poll interval."""
+    captured: dict[str, tuple] = {}
+
+    def fake_watch(config, poll_interval=5.0):
+        captured["watch_call"] = (config, poll_interval)
+
+    monkeypatch.setattr("claude_meter.cli.watch", fake_watch)
+    runner = CliRunner()
+    result = runner.invoke(main, ["watch", "--poll", "2.5"])
+    assert result.exit_code == 0
+    assert "Watching ClaudeCode logs for changes (poll=2.5s)..." in result.output
+    assert "watch_call" in captured
+    _, poll_val = captured["watch_call"]
+    assert poll_val == 2.5
