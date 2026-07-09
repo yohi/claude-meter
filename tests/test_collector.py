@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 from pathlib import Path
 
 from claude_meter.collector import collect_files, derive_project, parse_incremental
@@ -295,3 +296,61 @@ def test_collect_survives_null_or_non_string_model(temp_home: Path) -> None:
             (str(projects / "s-null.jsonl"),),
         ).fetchone()
         assert state["last_line"] == 3
+
+
+def test_insert_usage_conflict_updates_stale_attributes(temp_home: Path) -> None:
+    """同じ (session_id, request_id) を再取り込みしたとき、token 以外の属性
+    (timestamp/project/git_repository/model) も新値に更新され、トークン数の変化によって
+    古くなった region/cost_usd は再計算のため NULL にリセットされること。"""
+    from contextlib import closing
+    from claude_meter.collector import _insert_usage
+    from claude_meter.db import get_connection
+    from claude_meter.models import UsageRecord
+
+    config = load_config()
+    init_db(config.storage.db_path)
+
+    with closing(get_connection(config.storage.db_path)) as conn:
+        first = UsageRecord(
+            timestamp=datetime.fromisoformat("2026-07-08T10:00:00+00:00"),
+            session_id="s-conflict",
+            request_id="req-conflict",
+            project="old-project",
+            git_repository="old/repo",
+            model="old-model",
+            region="us-east-1",
+            input_tokens=10,
+            output_tokens=5,
+            source_file=Path("old.jsonl"),
+        )
+        first.cost_usd = 0.001
+        _insert_usage(conn, first)
+        conn.commit()
+
+        second = UsageRecord(
+            timestamp=datetime.fromisoformat("2026-07-08T11:00:00+00:00"),
+            session_id="s-conflict",
+            request_id="req-conflict",
+            project="new-project",
+            git_repository="new/repo",
+            model="new-model",
+            input_tokens=100,
+            output_tokens=50,
+            source_file=Path("new.jsonl"),
+        )
+        _insert_usage(conn, second)
+        conn.commit()
+
+        row = conn.execute(
+            "SELECT timestamp, project, git_repository, model, region, cost_usd, input_tokens "
+            "FROM requests WHERE session_id = 's-conflict' AND request_id = 'req-conflict'"
+        ).fetchone()
+        assert row["project"] == "new-project"
+        assert row["git_repository"] == "new/repo"
+        assert row["model"] == "new-model"
+        assert row["input_tokens"] == 100
+        assert row["timestamp"].startswith("2026-07-08T11:00:00")
+        # トークン数が変わったので cost_usd/region は再計算が必要
+        # -> NULL にリセットされ、fill_missing_costs の次回実行で正しく再計算される。
+        assert row["cost_usd"] is None
+        assert row["region"] is None

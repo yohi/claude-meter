@@ -256,12 +256,18 @@ def _insert_usage(conn: sqlite3.Connection, rec: UsageRecord) -> None:
             response_text, source_file
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id, request_id) DO UPDATE SET
+            timestamp=excluded.timestamp,
+            project=excluded.project,
+            git_repository=excluded.git_repository,
+            model=excluded.model,
+            region=excluded.region,
             input_tokens=excluded.input_tokens,
             output_tokens=excluded.output_tokens,
             cache_creation_input_tokens=excluded.cache_creation_input_tokens,
             cache_read_input_tokens=excluded.cache_read_input_tokens,
             source_file=excluded.source_file,
             response_time_ms=excluded.response_time_ms,
+            cost_usd=excluded.cost_usd,
             prompt_text=excluded.prompt_text,
             response_text=excluded.response_text""",
         (
