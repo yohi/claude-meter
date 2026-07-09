@@ -56,7 +56,12 @@ def _project_cost(conn: sqlite3.Connection, start: str, end: str) -> pd.DataFram
 def _model_tokens(conn: sqlite3.Connection, start: str, end: str) -> pd.DataFrame:
     rows = conn.execute(
         """SELECT model,
-                  SUM(input_tokens + output_tokens + cache_creation_input_tokens + cache_read_input_tokens) AS tokens
+                  SUM(
+                      COALESCE(input_tokens, 0)
+                      + COALESCE(output_tokens, 0)
+                      + COALESCE(cache_creation_input_tokens, 0)
+                      + COALESCE(cache_read_input_tokens, 0)
+                  ) AS tokens
            FROM requests
            WHERE timestamp >= ? AND timestamp < ?
            GROUP BY model""",

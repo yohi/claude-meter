@@ -24,10 +24,14 @@ def _list_sessions(conn: sqlite3.Connection) -> pd.DataFrame:
 
 
 def _session_requests(conn: sqlite3.Connection, session_id: str, show_prompts: bool) -> pd.DataFrame:
-    columns = """timestamp, request_id, project, model, input_tokens, output_tokens,
-                  cache_creation_input_tokens, cache_read_input_tokens, cost_usd"""
+    col_names = [
+        "timestamp", "request_id", "project", "model",
+        "input_tokens", "output_tokens",
+        "cache_creation_input_tokens", "cache_read_input_tokens", "cost_usd",
+    ]
     if show_prompts:
-        columns += ", prompt_text, response_text"
+        col_names += ["prompt_text", "response_text"]
+    columns = ", ".join(col_names)
     rows = conn.execute(
         f"""SELECT {columns}
            FROM requests
@@ -35,10 +39,7 @@ def _session_requests(conn: sqlite3.Connection, session_id: str, show_prompts: b
            ORDER BY timestamp""",
         (session_id,),
     ).fetchall()
-    return pd.DataFrame(
-        rows,
-        columns=[c.strip() for c in columns.replace(", ", ",").split(",")],
-    )
+    return pd.DataFrame(rows, columns=col_names)
 
 
 def render() -> None:
@@ -47,14 +48,17 @@ def render() -> None:
     with get_connection(config.storage.db_path) as conn:
         sessions = _list_sessions(conn)
         st.dataframe(sessions, use_container_width=True)
-        selected = st.selectbox("Session", sessions["session_id"].tolist())
-        if selected:
-            requests_df = _session_requests(conn, selected, config.privacy.show_prompts_in_ui)
-            st.dataframe(requests_df, use_container_width=True)
-            search = st.text_input("Search prompts/responses")
-            if search and config.privacy.show_prompts_in_ui:
-                mask = (
-                    requests_df["prompt_text"].str.contains(search, na=False, case=False)
-                    | requests_df["response_text"].str.contains(search, na=False, case=False)
-                )
-                st.dataframe(requests_df[mask], use_container_width=True)
+        if sessions.empty:
+            st.info("セッションが見つかりません。")
+        else:
+            selected = st.selectbox("Session", sessions["session_id"].tolist())
+            if selected:
+                requests_df = _session_requests(conn, selected, config.privacy.show_prompts_in_ui)
+                st.dataframe(requests_df, use_container_width=True)
+                search = st.text_input("Search prompts/responses")
+                if search and config.privacy.show_prompts_in_ui:
+                    mask = (
+                        requests_df["prompt_text"].str.contains(search, na=False, case=False)
+                        | requests_df["response_text"].str.contains(search, na=False, case=False)
+                    )
+                    st.dataframe(requests_df[mask], use_container_width=True)

@@ -11,7 +11,7 @@ from claude_meter.cli import main
 def test_full_flow(
     temp_home: Path, sample_project_jsonl: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Test full flow: init -> collect -> cost backfill (with pricing mocked)."""
+    """Test full flow: init -> collect (with pricing mocked)."""
     # Monkeypatch pricing update to avoid network calls
     monkeypatch.setattr("claude_meter.cost.update_pricing", lambda config, force=False: [])
 

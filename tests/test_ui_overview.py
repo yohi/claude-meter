@@ -1,4 +1,3 @@
-from datetime import datetime, timezone
 from pathlib import Path
 
 from claude_meter.db import get_connection, init_db
@@ -12,7 +11,7 @@ def test_summary_for_period_aggregates(tmp_path: Path) -> None:
     conn.execute(
         "INSERT INTO requests (timestamp, session_id, request_id, model, input_tokens, output_tokens, cost_usd) "
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (datetime.now(timezone.utc).isoformat(), "s", "r", "m", 100, 50, 0.123),
+        ("2026-07-15T00:00:00+00:00", "s", "r", "m", 100, 50, 0.123),
     )
     conn.commit()
     summary = _summary_for_period(conn, "2026-07-01", "2026-07-31")
