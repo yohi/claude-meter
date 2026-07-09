@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, Field
@@ -19,8 +20,8 @@ class _StorageConfig(BaseModel):
 
 
 class _PricingConfig(BaseModel):
-    primary_source: str = Field(default="models_dev")
-    fallback_source: str = Field(default="aws_bedrock_json")
+    primary_source: Literal["models_dev", "aws_bedrock_json"] = Field(default="models_dev")
+    fallback_source: Literal["models_dev", "aws_bedrock_json"] = Field(default="aws_bedrock_json")
     cache_ttl_hours: int = Field(default=24)
 
 
