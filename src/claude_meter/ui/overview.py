@@ -84,9 +84,10 @@ def _daily_avg_response_time(conn: sqlite3.Connection, start: str, end: str) -> 
 
 
 def _top_costly_prompts(conn: sqlite3.Connection, start: str, end: str, show_prompts: bool, limit: int = 10) -> pd.DataFrame:
-    columns = "timestamp, project, model, cost_usd"
+    column_names = ["timestamp", "project", "model", "cost_usd"]
     if show_prompts:
-        columns += ", prompt_text"
+        column_names.append("prompt_text")
+    columns = ", ".join(column_names)
     rows = conn.execute(
         f"""SELECT {columns}
            FROM requests
@@ -95,7 +96,7 @@ def _top_costly_prompts(conn: sqlite3.Connection, start: str, end: str, show_pro
            LIMIT ?""",
         (start, end, limit),
     ).fetchall()
-    return pd.DataFrame(rows, columns=columns.replace(", ", ",").split(","))
+    return pd.DataFrame(rows, columns=column_names)
 
 
 def render() -> None:
