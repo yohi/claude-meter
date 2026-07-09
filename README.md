@@ -12,3 +12,7 @@ claude-meter ui
 ```
 
 All data is stored in `~/.claude-meter/`. The only external network call is to refresh Bedrock pricing; everything else stays on your machine.
+
+## Privacy
+
+By default, `store_prompts: true` records prompt/response text alongside usage metrics. Set `store_prompts: false` to record **tokens and cost only** — this also skips reading transcripts entirely, so `response_time_ms` is not recorded either (not just prompt/response text).

@@ -1,9 +1,10 @@
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
-from claude_meter.cost import calculate_cost
+from claude_meter.cost import build_canonical_pricing_index, calculate_cost
 from claude_meter.models import PricingRecord, UsageRecord
 
 
@@ -350,3 +351,96 @@ def test_calculate_cost_prices_current_model_absent_from_whitelist() -> None:
     }
     cost = calculate_cost(record, pricing, "us-east-1")
     assert cost == pytest.approx(1000 * 0.003 / 1000 + 500 * 0.015 / 1000)
+
+
+def test_build_canonical_pricing_index_deterministic_on_collision() -> None:
+    """2つの異なる raw model id が同一の (canonical_key, region) に還元される場合、
+    dict/API のイテレーション順に依存せず、辞書順で最初の raw model id が決定的に勝つこと。"""
+    pricing = {
+        (
+            "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "us-east-1",
+        ): PricingRecord(
+            model="global.anthropic.claude-haiku-4-5-20251001-v1:0",
+            region="us-east-1",
+            input_price_per_1k=0.001,
+            output_price_per_1k=0.005,
+        ),
+        (
+            "anthropic.claude-haiku-4-5-20251001-v1:0",
+            "us-east-1",
+        ): PricingRecord(
+            model="anthropic.claude-haiku-4-5-20251001-v1:0",
+            region="us-east-1",
+            input_price_per_1k=0.0008,
+            output_price_per_1k=0.004,
+        ),
+    }
+    index = build_canonical_pricing_index(pricing)
+    # 衝突する2エントリは単一のキャノニカルキーに畳み込まれる。
+    assert len(index) == 1
+    # 辞書順で最初の raw model id(anthropic... < global...)が決定的に勝つ。
+    assert (
+        index[("claude-haiku-4-5-20251001", "us-east-1")].model
+        == "anthropic.claude-haiku-4-5-20251001-v1:0"
+    )
+
+
+def test_calculate_cost_accepts_precomputed_canonical_index() -> None:
+    """事前計算した canonical index を明示的に渡しても、キャノニカル fallback により
+    単価を引き当てられること。"""
+    record = UsageRecord(
+        timestamp=datetime.now(timezone.utc),
+        session_id="s",
+        request_id="r",
+        model="claude-haiku-4-5-20251001",
+        input_tokens=1000,
+        output_tokens=500,
+        source_file=Path("x"),
+    )
+    pricing = {
+        ("eu.anthropic.claude-haiku-4-5-20251001-v1:0", "eu-west-1"): PricingRecord(
+            model="eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+            region="eu-west-1",
+            input_price_per_1k=0.0008,
+            output_price_per_1k=0.004,
+        )
+    }
+    canonical_index = build_canonical_pricing_index(pricing)
+    cost = calculate_cost(record, pricing, "eu-west-1", canonical_index)
+    assert cost == pytest.approx(1000 * 0.0008 / 1000 + 500 * 0.004 / 1000)
+
+
+def test_calculate_cost_logs_warning_for_unpriced_model(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """claude- 接頭辞にマッチするが価格が見つからないモデルは警告ログを1回だけ出し、
+    2回目以降は(プロセス内 dedup により)重複ログしないこと。"""
+    from claude_meter import cost as cost_module
+
+    model = "claude-totally-made-up-typo"
+    # 他テストの影響を排除するため、対象モデルの dedup 記録をクリアしておく。
+    cost_module._logged_unpriced_models.discard(model)
+
+    record = UsageRecord(
+        timestamp=datetime.now(timezone.utc),
+        session_id="s",
+        request_id="r",
+        model=model,
+        input_tokens=1,
+        source_file=Path("x"),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="claude_meter.cost"):
+        first = calculate_cost(record, {}, "us-east-1")
+    assert first is None
+    warnings = [r for r in caplog.records if model in r.getMessage()]
+    assert len(warnings) == 1
+
+    # 同一モデルの2回目呼び出しでは dedup により警告が出ないこと。
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="claude_meter.cost"):
+        second = calculate_cost(record, {}, "us-east-1")
+    assert second is None
+    warnings_again = [r for r in caplog.records if model in r.getMessage()]
+    assert len(warnings_again) == 0

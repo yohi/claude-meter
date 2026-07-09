@@ -1,5 +1,6 @@
 """Cost calculation from usage records and cached pricing."""
 
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -13,11 +14,19 @@ from claude_meter.model_normalizer import (
 from claude_meter.models import PricingRecord, UsageRecord
 from claude_meter.pricing import update_pricing
 
+logger = logging.getLogger(__name__)
+
+# Dedup so a given unpriced model logs only once per process (fill_missing_costs
+# re-scans unresolved rows on every call, e.g. from watcher.py's periodic loop;
+# without this a permanently-unpriced model would spam the log forever).
+_logged_unpriced_models: set[str] = set()
+
 
 def calculate_cost(
     record: UsageRecord,
     pricing: dict[tuple[str, str], PricingRecord],
     region: str,
+    canonical_index: dict[tuple[str, str], PricingRecord] | None = None,
 ) -> float | None:
     normalized = normalize_model_name(record.model)
     if normalized is None:
@@ -32,13 +41,26 @@ def calculate_cost(
         # Canonical fallback: exact ARN keys can miss when pricing comes from
         # models.dev (region-prefixed ids like "eu.anthropic.claude-...") or when
         # the model is absent from the built-in whitelist. Match on a
-        # prefix/version-stripped core key within the same region.
-        target = canonical_model_key(record.model)
-        for (p_model, p_region), p_price in pricing.items():
-            if p_region == region and canonical_model_key(p_model) == target:
-                price = p_price
-                break
+        # prefix/version-stripped core key within the same region using a
+        # precomputed (canonical_key, region) -> PricingRecord index (O(1))
+        # instead of scanning the whole pricing dict per call.
+        index = (
+            canonical_index
+            if canonical_index is not None
+            else build_canonical_pricing_index(pricing)
+        )
+        price = index.get((canonical_model_key(record.model), region))
     if price is None:
+        if record.model not in _logged_unpriced_models:
+            _logged_unpriced_models.add(record.model)
+            logger.warning(
+                "No pricing found for model=%r region=%r (normalized=%r); cost "
+                "will be recorded as NULL. This can mean a typo/unknown model "
+                "name, or a legitimate model missing from the pricing cache.",
+                record.model,
+                region,
+                normalized,
+            )
         return None
     def _component(tokens: int, price_per_1k: float | None) -> float | None:
         # 使用トークンが 0 のコンポーネントは価格未知でも影響しないので 0 を返す。
@@ -67,6 +89,41 @@ def calculate_cost(
     return input_cost + output_cost + cache_creation_cost + cache_read_cost
 
 
+def build_canonical_pricing_index(
+    pricing: dict[tuple[str, str], PricingRecord],
+) -> dict[tuple[str, str], PricingRecord]:
+    """Build a (canonical_key, region) -> PricingRecord index once, so
+    calculate_cost()'s canonical fallback can do an O(1) lookup instead of
+    scanning the whole pricing dict (and recomputing canonical_model_key() for
+    every entry) on every call.
+
+    Multiple raw pricing keys can reduce to the same (canonical_key, region) -
+    e.g. models.dev returns both a bare "anthropic.claude-...-v1:0" id and a
+    "global.anthropic.claude-...-v1:0" id, and both map to region "us-east-1"
+    (see _MODELS_DEV_REGION_BY_PREFIX in pricing.py). When that happens we deterministically
+    keep the lexicographically-first raw model id (independent of dict/API
+    iteration order) and log a warning so the ambiguity is visible instead of
+    silently depending on iteration order.
+    """
+    index: dict[tuple[str, str], PricingRecord] = {}
+    for (p_model, p_region), p_price in sorted(pricing.items(), key=lambda kv: kv[0][0]):
+        canon_key = (canonical_model_key(p_model), p_region)
+        existing = index.get(canon_key)
+        if existing is not None and existing.model != p_model:
+            logger.warning(
+                "Ambiguous canonical pricing match for canonical_key=%r region=%r: "
+                "keeping price from model=%r over model=%r (deterministic: "
+                "lexicographically-first wins)",
+                canon_key[0],
+                p_region,
+                existing.model,
+                p_model,
+            )
+            continue
+        index[canon_key] = p_price
+    return index
+
+
 def _load_pricing_map(config: Config) -> dict[tuple[str, str], PricingRecord]:
     records = update_pricing(config)
     return {(r.model, r.region): r for r in records}
@@ -75,6 +132,7 @@ def _load_pricing_map(config: Config) -> dict[tuple[str, str], PricingRecord]:
 def fill_missing_costs(config: Config, region: str | None = None) -> int:
     target_region = region or config.claude.region
     pricing = _load_pricing_map(config)
+    canonical_index = build_canonical_pricing_index(pricing)
     updated = 0
     with get_connection(config.storage.db_path) as conn:
         cursor = conn.execute(
@@ -96,7 +154,7 @@ def fill_missing_costs(config: Config, region: str | None = None) -> int:
                 cache_read_input_tokens=row["cache_read_input_tokens"] or 0,
                 source_file=Path("."),
             )
-            cost = calculate_cost(record, pricing, row_region)
+            cost = calculate_cost(record, pricing, row_region, canonical_index)
             cost_missing = row["cost_usd"] is None
             if row["region"] is None:
                 if cost_missing and cost is not None:
