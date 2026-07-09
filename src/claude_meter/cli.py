@@ -7,6 +7,7 @@ import sys
 
 import click
 
+from claude_meter.collector import parse_incremental
 from claude_meter.config import Config, load_config, resolve_config_path
 from claude_meter.cost import fill_missing_costs
 from claude_meter.db import init_db
@@ -39,7 +40,6 @@ def init() -> None:
 def collect() -> None:
     """Parse ClaudeCode JSONL logs once."""
     config = _config_and_db()
-    from claude_meter.collector import parse_incremental
     inserted = parse_incremental(config)
     fill_missing_costs(config)
     click.echo(f"Inserted {inserted} new records.")
