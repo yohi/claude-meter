@@ -44,8 +44,13 @@ def render() -> None:
     st.write(f"Cache TTL (hours): {config.pricing.cache_ttl_hours}")
 
     if st.button("Refresh pricing"):
-        update_pricing(config, force=True)
-        st.success("Pricing refreshed.")
+        with st.spinner("Refreshing pricing..."):
+            try:
+                update_pricing(config, force=True)
+            except Exception as exc:
+                st.error(f"Failed to refresh pricing: {exc}")
+            else:
+                st.success("Pricing refreshed.")
 
     with closing(get_connection(config.storage.db_path)) as conn:
         pricing = _list_pricing(conn)
