@@ -8,8 +8,9 @@ def _load_mapping() -> dict[str, list[str]]:
     resource = resources.files("claude_meter").joinpath("pricing_fallback.json")
     data = json.loads(resource.read_text(encoding="utf-8"))
     return {
-        name: info["arn_keys"]
+        name: info.get("arn_keys", [name])
         for name, info in data.get("models", {}).items()
+        if isinstance(info, dict)
     }
 
 
