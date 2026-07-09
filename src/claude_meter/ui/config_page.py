@@ -6,7 +6,13 @@ from claude_meter.config import load_config, save_config
 
 
 def render() -> None:
-    config = load_config()
+    try:
+        config = load_config()
+    except (ValueError, OSError) as exc:
+        # pydantic ValidationError (raised by Config.model_validate) subclasses ValueError,
+        # so this also covers invalid config values; ValueError covers invalid YAML too.
+        st.error(f"Failed to load configuration: {exc}")
+        st.stop()
     st.title("Config")
 
     st.subheader("Current Configuration")
@@ -48,5 +54,9 @@ def render() -> None:
         config.ui.host = host
         config.ui.port = int(port)
         config.pricing.cache_ttl_hours = int(cache_ttl_hours)
-        save_config(config)
-        st.success("Configuration saved.")
+        try:
+            save_config(config)
+        except OSError as exc:
+            st.error(f"Failed to save configuration: {exc}")
+        else:
+            st.success("Configuration saved.")
