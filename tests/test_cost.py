@@ -46,6 +46,62 @@ def test_calculate_cost_unknown_model_returns_none() -> None:
     assert calculate_cost(record, {}, "us-east-1") is None
 
 
+def test_calculate_cost_returns_none_when_used_price_component_missing() -> None:
+    """使用されているトークンの価格が None (価格ソースから取得できなかった) の場合、
+    0円として計上するのではなく None を返し、過小な cost_usd が確定しないこと。"""
+    record = UsageRecord(
+        timestamp=datetime.now(timezone.utc),
+        session_id="s",
+        request_id="r",
+        model="claude-sonnet-4-5-20260701",
+        input_tokens=1000,
+        output_tokens=500,
+        cache_creation_input_tokens=2000,
+        cache_read_input_tokens=100,
+        source_file=Path("x"),
+    )
+    pricing = {
+        ("anthropic.claude-sonnet-4-5-20260701-v1:0", "us-east-1"): PricingRecord(
+            model="anthropic.claude-sonnet-4-5-20260701-v1:0",
+            region="us-east-1",
+            input_price_per_1k=0.003,
+            output_price_per_1k=0.015,
+            cache_creation_price_per_1k=None,  # 価格ソースで欠落
+            cache_read_price_per_1k=0.0003,
+        )
+    }
+    cost = calculate_cost(record, pricing, "us-east-1")
+    assert cost is None
+
+
+def test_calculate_cost_ignores_missing_price_for_zero_token_component() -> None:
+    """使用されていない(トークン数 0)コンポーネントの価格が None であっても、
+    全体の計算には影響しないこと。"""
+    record = UsageRecord(
+        timestamp=datetime.now(timezone.utc),
+        session_id="s",
+        request_id="r",
+        model="claude-sonnet-4-5-20260701",
+        input_tokens=1000,
+        output_tokens=500,
+        cache_creation_input_tokens=0,
+        cache_read_input_tokens=0,
+        source_file=Path("x"),
+    )
+    pricing = {
+        ("anthropic.claude-sonnet-4-5-20260701-v1:0", "us-east-1"): PricingRecord(
+            model="anthropic.claude-sonnet-4-5-20260701-v1:0",
+            region="us-east-1",
+            input_price_per_1k=0.003,
+            output_price_per_1k=0.015,
+            cache_creation_price_per_1k=None,
+            cache_read_price_per_1k=None,
+        )
+    }
+    cost = calculate_cost(record, pricing, "us-east-1")
+    assert cost == pytest.approx(0.003 + 0.0075)
+
+
 def test_fill_missing_costs_handles_null_token_columns(tmp_path: Path) -> None:
     """Test that fill_missing_costs handles NULL token columns gracefully."""
     from claude_meter.config import Config

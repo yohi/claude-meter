@@ -26,14 +26,30 @@ def calculate_cost(
             break
     if price is None:
         return None
-    input_cost = (record.input_tokens * (price.input_price_per_1k or 0)) / 1000
-    output_cost = (record.output_tokens * (price.output_price_per_1k or 0)) / 1000
-    cache_creation_cost = (
-        record.cache_creation_input_tokens * (price.cache_creation_price_per_1k or 0)
-    ) / 1000
-    cache_read_cost = (
-        record.cache_read_input_tokens * (price.cache_read_price_per_1k or 0)
-    ) / 1000
+    def _component(tokens: int, price_per_1k: float | None) -> float | None:
+        # 使用トークンが 0 のコンポーネントは価格未知でも影響しないので 0 を返す。
+        # トークンがあるのに価格が None の場合は、′30円’として過小計上しないよう None を返す。
+        if tokens <= 0:
+            return 0.0
+        if price_per_1k is None:
+            return None
+        return (tokens * price_per_1k) / 1000
+
+    input_cost = _component(record.input_tokens, price.input_price_per_1k)
+    output_cost = _component(record.output_tokens, price.output_price_per_1k)
+    cache_creation_cost = _component(
+        record.cache_creation_input_tokens, price.cache_creation_price_per_1k
+    )
+    cache_read_cost = _component(
+        record.cache_read_input_tokens, price.cache_read_price_per_1k
+    )
+    if (
+        input_cost is None
+        or output_cost is None
+        or cache_creation_cost is None
+        or cache_read_cost is None
+    ):
+        return None
     return input_cost + output_cost + cache_creation_cost + cache_read_cost
 
 
