@@ -354,3 +354,66 @@ def test_insert_usage_conflict_updates_stale_attributes(temp_home: Path) -> None
         # -> NULL にリセットされ、fill_missing_costs の次回実行で正しく再計算される。
         assert row["cost_usd"] is None
         assert row["region"] is None
+
+
+def test_store_prompts_false_skips_transcript_capture(temp_home: Path) -> None:
+    """privacy.store_prompts=false のとき、プロンプト本文・応答本文・応答時間を一切
+    記録しないこと(設計「トークン数・コストのみ記録」+ 計画Task7 のゲートに準拠、乖離5回帰)。"""
+    from contextlib import closing
+    from claude_meter.db import get_connection
+
+    config = load_config()
+    config.privacy.store_prompts = False
+    init_db(config.storage.db_path)
+    projects = temp_home / ".claude" / "projects" / "demo"
+    projects.mkdir(parents=True)
+    (projects / "s1.jsonl").write_text(
+        json.dumps(
+            {
+                "type": "assistant",
+                "timestamp": "2026-07-08T10:00:00Z",
+                "cwd": "/x",
+                "sessionId": "s1",
+                "requestId": "req-A",
+                "message": {"model": "m", "usage": {"input_tokens": 10}},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    transcripts = temp_home / ".claude" / "transcripts"
+    transcripts.mkdir(parents=True)
+    (transcripts / "s1.jsonl").write_text(
+        json.dumps(
+            {
+                "type": "user",
+                "timestamp": "2026-07-08T09:59:59Z",
+                "sessionId": "s1",
+                "requestId": "req-A",
+                "message": {"content": "secret prompt"},
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "type": "assistant",
+                "timestamp": "2026-07-08T10:00:00Z",
+                "sessionId": "s1",
+                "requestId": "req-A",
+                "message": {"content": "secret response"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    inserted = parse_incremental(config)
+    assert inserted == 1
+    with closing(get_connection(config.storage.db_path)) as conn:
+        row = conn.execute(
+            "SELECT prompt_text, response_text, response_time_ms "
+            "FROM requests WHERE session_id = 's1'"
+        ).fetchone()
+        assert row["prompt_text"] is None
+        assert row["response_text"] is None
+        assert row["response_time_ms"] is None
