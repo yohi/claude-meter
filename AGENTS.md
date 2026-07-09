@@ -19,10 +19,17 @@ SQLite.
 Always run the quality gates after code changes:
 
 ```bash
+# POSIX / macOS / Linux
 .venv/bin/python -m pytest -q
 .venv/bin/python -m ruff check src tests
-.venv/bin/python -m mypy src
-markdownlint-cli2 README.md
+.venv/bin/python -m mypy --strict src
+markdownlint-cli2 README.md SPEC.md AGENTS.md
+
+# Windows
+.venv\Scripts\python -m pytest -q
+.venv\Scripts\python -m ruff check src tests
+.venv\Scripts\python -m mypy --strict src
+markdownlint-cli2 README.md SPEC.md AGENTS.md
 ```
 
 ## Conventions

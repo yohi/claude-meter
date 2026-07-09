@@ -31,7 +31,10 @@ small CLI.
 
 ## Data sources
 
-### Primary: `~/.claude/projects/<project-name>/<session-id>.jsonl`
+### Primary: `<claude-data>/projects/<project-name>/<session-id>.jsonl`
+
+Default: `~/.claude/projects/<project-name>/<session-id>.jsonl` on macOS/Linux,
+`%LOCALAPPDATA%\\Claude\\projects\\...` on Windows.
 
 ClaudeCode creates one JSONL file per project per session. `assistant`-type
 records contain the inference result and token usage:
@@ -55,21 +58,30 @@ records contain the inference result and token usage:
 }
 ```
 
-### Prompts: `~/.claude/transcripts/<session-id>.jsonl`
+### Prompts: `<claude-data>/transcripts/<session-id>.jsonl`
+
+Default: `~/.claude/transcripts/<session-id>.jsonl` on macOS/Linux,
+`%LOCALAPPDATA%\\Claude\\transcripts\\...` on Windows.
 
 Same-`sessionId` transcript files provide the corresponding `user` and
 `assistant` message bodies. These are only read when `privacy.store_prompts` is
 `true`.
 
-### Auxiliary: `~/.claude/history.jsonl`
+### Auxiliary: `<claude-data>/history.jsonl`
+
+Default: `~/.claude/history.jsonl` on macOS/Linux,
+`%LOCALAPPDATA%\\Claude\\history.jsonl` on Windows.
 
 UI display text and project path hints. Used as an optional hint for project
 display names; missing or malformed history data never blocks collection.
 
 ## Collection method
 
-- The collector scans `~/.claude/projects/*/*.jsonl` and
-  `~/.claude/transcripts/*.jsonl`
+- The collector scans the configured projects directory
+  (`~/.claude/projects/*/*.jsonl` on macOS/Linux,
+  `%LOCALAPPDATA%\\Claude\\projects\\...` on Windows) and the configured
+  transcripts directory (`~/.claude/transcripts/*.jsonl` on macOS/Linux,
+  `%LOCALAPPDATA%\\Claude\\transcripts\\...` on Windows).
 - File changes are detected via `watchdog` (with polling fallback)
 - A `sync_state` table tracks the last parsed position per file for
   **incremental parsing**
@@ -282,8 +294,9 @@ Launched via `claude-meter ui` at `http://127.0.0.1:8501`.
 
 ### Privacy controls
 
-- `privacy.store_prompts` — toggles whether prompt/response text is stored at
-  all (also controls transcript reading and response-time recording)
+- `privacy.store_prompts` — when `false`, prompt/response text is not stored,
+  transcripts are not read, and `response_time_ms` is not recorded; tokens,
+  cost, and request metadata are still retained.
 - `privacy.show_prompts_in_ui` — toggles visibility in the UI independently of
   storage
 
@@ -294,7 +307,8 @@ Tool name: `claude-meter` (alias `cm`)
 | Command | Description |
 | --- | --- |
 | `claude-meter init` | Create config file and SQLite database |
-| `claude-meter watch [--poll N]` | Watch `~/.claude` for new data |
+| `claude-meter collect` | Parse JSONL logs once and backfill costs |
+| `claude-meter watch [--poll N]` | Watch configured data dir for new data |
 | `claude-meter ui [--port N] [--host H]` | Launch the Streamlit UI |
 | `claude-meter pricing update [--force]` | Refresh Bedrock pricing cache |
 | `claude-meter config` | Show the config file path |

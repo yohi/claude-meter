@@ -17,24 +17,31 @@ refresh Bedrock pricing; everything else stays on your machine.
 ## Privacy
 
 By default, `store_prompts: true` records prompt/response text alongside usage
-metrics. Set `store_prompts: false` to record **tokens and cost only** — this
-also skips reading transcripts entirely, so `response_time_ms` is not recorded
-either (not just prompt/response text).
+metrics and metadata. Set `store_prompts: false` to skip storing prompt/response
+bodies and to stop reading transcripts. Usage metrics (tokens, cost) and request
+metadata (project, session, model, timestamp, etc.) are still retained. Because
+transcripts are not read, `response_time_ms` is also omitted.
 
 Project names are derived from the `cwd` in each JSONL record (`.git/config` or
-directory name). `~/.claude/history.jsonl` is used as an optional hint for
-project display names; missing history data never blocks collection.
+directory name). The default Claude data directory's `history.jsonl`
+(e.g. `~/.claude/history.jsonl` on macOS/Linux,
+`%LOCALAPPDATA%\\Claude\\history.jsonl` on Windows) is used as an optional hint
+for project display names; missing history data never blocks collection.
 
 Records without a `requestId` are assigned a deterministic synthetic ID so the
 `(session_id, request_id)` uniqueness constraint remains valid.
 
 ## What it does
 
-- Parses ClaudeCode JSONL logs from `~/.claude/projects/*/*.jsonl`
-  incrementally.
-- Pairs prompt/response bodies from `~/.claude/transcripts/*.jsonl` when
-`store_prompts: true`, and estimates `response_time_ms` from the user/assistant
-  timestamp delta for the same `requestId`.
+- Parses ClaudeCode JSONL logs from the configured projects directory
+  (default `~/.claude/projects/*/*.jsonl` on macOS/Linux,
+  `%LOCALAPPDATA%\\Claude\\projects\\...` on Windows) incrementally.
+- Pairs prompt/response bodies from the configured transcripts directory
+  (default `~/.claude/transcripts/*.jsonl` on macOS/Linux,
+  `%LOCALAPPDATA%\\Claude\\transcripts\\*.jsonl` on Windows) when
+  `store_prompts: true`, and estimates `response_time_ms` from the
+  and estimates `response_time_ms` from the user/assistant timestamp delta for
+  the same `requestId`.
 - Estimates AWS Bedrock cost using cached per-model, per-region pricing.
 - Stores everything locally in `~/.claude-meter/data.db` (`requests`, `pricing`,
   `sync_state`, and `daily_summary` tables).
@@ -51,7 +58,7 @@ Records without a `requestId` are assigned a deterministic synthetic ID so the
 | --- | --- |
 | `claude-meter init` | Create config and SQLite database |
 | `claude-meter collect` | Parse JSONL logs once and backfill costs |
-| `claude-meter watch` | Watch ~/.claude for new data (`watchdog` or polling) |
+| `claude-meter watch` | Watch configured data dir (`watchdog` or polling) |
 | `claude-meter ui` | Launch the Streamlit UI |
 | `claude-meter pricing update [--force]` | Refresh Bedrock pricing cache |
 | `claude-meter config` | Show the config file path |
@@ -62,8 +69,8 @@ Records without a `requestId` are assigned a deterministic synthetic ID so the
 
 ```yaml
 claude:
-  projects_dir: null      # default: ~/.claude/projects
-  transcripts_dir: null     # default: ~/.claude/transcripts
+  projects_dir: null      # default: OS-specific (see below)
+  transcripts_dir: null     # default: OS-specific (see below)
   region: "us-east-1"     # region used for cost calculation
 
 storage:
@@ -138,9 +145,15 @@ built-in fallback. TTL is configurable (default 24 hours).
 ## Development
 
 ```bash
+# POSIX / macOS / Linux
 .venv/bin/python -m pytest -q
 .venv/bin/python -m ruff check src tests
-.venv/bin/python -m mypy src
+.venv/bin/python -m mypy --strict src
+
+# Windows
+.venv\Scripts\python -m pytest -q
+.venv\Scripts\python -m ruff check src tests
+.venv\Scripts\python -m mypy --strict src
 ```
 
 ## Tech stack
