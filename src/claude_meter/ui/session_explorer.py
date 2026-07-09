@@ -12,7 +12,7 @@ from claude_meter.db import get_connection
 
 def _list_sessions(conn: sqlite3.Connection) -> pd.DataFrame:
     rows = conn.execute(
-        """SELECT session_id, COUNT(*) AS requests, SUM(cost_usd) AS total_cost,
+        """SELECT session_id, COUNT(*) AS requests, COALESCE(SUM(cost_usd), 0) AS total_cost,
                   MIN(timestamp) AS first_seen, MAX(timestamp) AS last_seen
            FROM requests
            GROUP BY session_id

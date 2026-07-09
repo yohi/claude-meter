@@ -15,9 +15,9 @@ def _project_summary(conn: sqlite3.Connection) -> pd.DataFrame:
     rows = conn.execute(
         """SELECT project,
                   COUNT(*) AS requests,
-                  SUM(cost_usd) AS total_cost,
-                  SUM(input_tokens) AS input_tokens,
-                  SUM(output_tokens) AS output_tokens
+                  COALESCE(SUM(cost_usd), 0) AS total_cost,
+                  COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                  COALESCE(SUM(output_tokens), 0) AS output_tokens
            FROM requests
            GROUP BY project
            ORDER BY total_cost DESC"""
