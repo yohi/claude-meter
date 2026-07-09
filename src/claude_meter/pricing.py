@@ -40,15 +40,15 @@ _MODELS_DEV_REGION_BY_PREFIX = {
 }
 
 
-def _cache_path(config: Config) -> Path:
+def _cache_path() -> Path:
     return resolve_config_path().parent / "pricing.json"
 
 
-def _cache_meta_path(config: Config) -> Path:
+def _cache_meta_path() -> Path:
     return resolve_config_path().parent / "pricing-meta.yaml"
 
 
-def _override_path(config: Config) -> Path:
+def _override_path() -> Path:
     return resolve_config_path().parent / "pricing-overrides.json"
 
 
@@ -88,8 +88,8 @@ def load_fallback_pricing(config: Config | None = None) -> list[PricingRecord]:
 
 
 def _load_cached_pricing(config: Config, allow_stale: bool = False) -> list[PricingRecord] | None:
-    cache = _cache_path(config)
-    meta = _cache_meta_path(config)
+    cache = _cache_path()
+    meta = _cache_meta_path()
     if not cache.exists() or not meta.exists():
         return None
     try:
@@ -106,7 +106,7 @@ def _load_cached_pricing(config: Config, allow_stale: bool = False) -> list[Pric
 
 
 def load_pricing_overrides(config: Config) -> list[PricingRecord]:
-    path = _override_path(config)
+    path = _override_path()
     if not path.exists():
         return []
     try:
@@ -118,7 +118,7 @@ def load_pricing_overrides(config: Config) -> list[PricingRecord]:
 
 
 def save_pricing_overrides(config: Config, records: list[PricingRecord]) -> None:
-    path = _override_path(config)
+    path = _override_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps([record.model_dump(mode="json") for record in records], indent=2),
@@ -139,8 +139,8 @@ def _apply_pricing_overrides(config: Config, records: list[PricingRecord]) -> li
 
 
 def _save_cached_pricing(config: Config, records: list[PricingRecord]) -> None:
-    cache = _cache_path(config)
-    meta = _cache_meta_path(config)
+    cache = _cache_path()
+    meta = _cache_meta_path()
     cache.parent.mkdir(parents=True, exist_ok=True)
     # tmpファイルに書いてから os.replace でアトミックに差し替える。中途のクラッシュにより
     # 半端なJSON/YAMLが残らないようにする。並行実行(CLI/UI/watcherの同時起動)で固定名の

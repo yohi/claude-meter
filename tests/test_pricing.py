@@ -46,7 +46,7 @@ def test_update_pricing_uses_cache_when_fresh(temp_home: Path) -> None:
     _save_cached_pricing(config, records)
     result = update_pricing(config)
     assert len(result) == 1
-    assert result[0].input_price_per_1k == 1.0
+    assert result[0].input_price_per_1k == pytest.approx(1.0)
 
 
 def test_update_pricing_applies_overrides_to_fresh_cache(temp_home: Path) -> None:
@@ -76,14 +76,14 @@ def test_update_pricing_applies_overrides_to_fresh_cache(temp_home: Path) -> Non
 
     result = update_pricing(config)
 
-    assert result[0].input_price_per_1k == 2.0
+    assert result[0].input_price_per_1k == pytest.approx(2.0)
     with closing(get_connection(config.storage.db_path)) as conn:
         row = conn.execute(
             "SELECT input_price_per_1k, source FROM pricing WHERE model = ? AND region = ?",
             (model, "us-east-1"),
         ).fetchone()
     assert row is not None
-    assert row["input_price_per_1k"] == 2.0
+    assert row["input_price_per_1k"] == pytest.approx(2.0)
     assert row["source"] == "local_override"
 
 
@@ -132,7 +132,7 @@ def test_update_pricing_uses_stale_cache_when_all_sources_fail(
         )
     ]
     _save_cached_pricing(config, cached)
-    _cache_meta_path(config).write_text(
+    _cache_meta_path().write_text(
         yaml.safe_dump({"updated_at": (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()}),
         encoding="utf-8",
     )
@@ -176,8 +176,8 @@ def test_save_cached_pricing_leaves_no_leftover_tmp_files(temp_home: Path) -> No
 
     _save_cached_pricing(config, records)
 
-    cache = _cache_path(config)
-    meta = _cache_meta_path(config)
+    cache = _cache_path()
+    meta = _cache_meta_path()
     assert cache.exists()
     assert meta.exists()
     # 一時ファイル(*.tmp)はクリーアコーンされて残らないこと。
