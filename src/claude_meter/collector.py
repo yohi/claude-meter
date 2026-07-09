@@ -97,6 +97,55 @@ def _parse_iso_ts(ts: str) -> datetime:
     return dt
 
 
+_TRANSCRIPT_FILE_CACHE: dict[
+    Path, tuple[float, int, dict[tuple[str, str | None], tuple[str, str, datetime]]]
+] = {}
+
+
+def _parse_transcript_file(
+    file_path: Path,
+) -> dict[tuple[str, str | None], tuple[str, str, datetime]]:
+    """Parse a single transcript JSONL file into user/assistant pairs keyed by (session_id, request_id)."""
+    pairs: dict[tuple[str, str | None], tuple[str, str, datetime]] = {}
+    try:
+        fh = file_path.open("r", encoding="utf-8", errors="replace")
+    except OSError:
+        return pairs
+    with fh as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            msg_type = record.get("type")
+            key = (record.get("sessionId", ""), record.get("requestId"))
+            raw_content = record.get("message", {}).get("content", "")
+            if isinstance(raw_content, list):
+                content = "".join(
+                    block.get("text", "")
+                    for block in raw_content
+                    if isinstance(block, dict)
+                )
+            elif isinstance(raw_content, str):
+                content = raw_content
+            else:
+                content = str(raw_content)
+            try:
+                ts = _parse_iso_ts(record.get("timestamp", "1970-01-01T00:00:00Z"))
+            except (ValueError, TypeError):
+                ts = datetime(1970, 1, 1, tzinfo=timezone.utc)
+            if msg_type == "user":
+                existing = pairs.get(key, ("", "", ts))
+                pairs[key] = (content, existing[1], ts)
+            elif msg_type == "assistant":
+                existing = pairs.get(key, ("", "", ts))
+                pairs[key] = (existing[0], content, existing[2])
+    return pairs
+
+
 def _load_transcripts(config: Config) -> dict[tuple[str, str | None], tuple[str, str, datetime]]:
     """Load user/assistant message pairs keyed by (session_id, request_id)."""
     base = config.claude.transcripts_dir or default_claude_dir() / "transcripts"
@@ -105,41 +154,16 @@ def _load_transcripts(config: Config) -> dict[tuple[str, str | None], tuple[str,
     pairs: dict[tuple[str, str | None], tuple[str, str, datetime]] = {}
     for file_path in sorted(base.glob("*.jsonl")):
         try:
-            fh = file_path.open("r", encoding="utf-8")
+            stat = file_path.stat()
         except OSError:
             continue
-        with fh as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                msg_type = record.get("type")
-                key = (record.get("sessionId", ""), record.get("requestId"))
-                raw_content = record.get("message", {}).get("content", "")
-                if isinstance(raw_content, list):
-                    content = "".join(
-                        block.get("text", "")
-                        for block in raw_content
-                        if isinstance(block, dict)
-                    )
-                elif isinstance(raw_content, str):
-                    content = raw_content
-                else:
-                    content = str(raw_content)
-                try:
-                    ts = _parse_iso_ts(record.get("timestamp", "1970-01-01T00:00:00Z"))
-                except (ValueError, TypeError):
-                    ts = datetime(1970, 1, 1, tzinfo=timezone.utc)
-                if msg_type == "user":
-                    existing = pairs.get(key, ("", "", ts))
-                    pairs[key] = (content, existing[1], ts)
-                elif msg_type == "assistant":
-                    existing = pairs.get(key, ("", "", ts))
-                    pairs[key] = (existing[0], content, existing[2])
+        cached = _TRANSCRIPT_FILE_CACHE.get(file_path)
+        if cached is not None and cached[0] == stat.st_mtime and cached[1] == stat.st_size:
+            file_pairs = cached[2]
+        else:
+            file_pairs = _parse_transcript_file(file_path)
+            _TRANSCRIPT_FILE_CACHE[file_path] = (stat.st_mtime, stat.st_size, file_pairs)
+        pairs.update(file_pairs)
     return pairs
 
 
@@ -173,7 +197,7 @@ def parse_incremental(config: Config) -> int:
             if last_size is not None and current_size < last_size:
                 start_line = 0
             try:
-                fh = file_path.open("r", encoding="utf-8")
+                fh = file_path.open("r", encoding="utf-8", errors="replace")
             except OSError:
                 continue
             with fh as f:
@@ -243,6 +267,7 @@ def parse_incremental(config: Config) -> int:
                     _insert_usage(conn, rec)
                     inserted += 1
             _update_sync_state(conn, file_path, current_size, line_no)
+            conn.commit()
         conn.commit()
     return inserted
 
