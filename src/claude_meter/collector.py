@@ -185,7 +185,10 @@ def _compute_response_time(
 def parse_incremental(config: Config) -> int:
     files = collect_files(config)
     history_hints = load_history_project_hints(config)
-    transcripts = _load_transcripts(config)
+    # Transcripts contain prompt/response bodies. When prompt storage is disabled,
+    # skip them entirely so neither prompt text nor response-time metadata is
+    # recorded (design: "tokens & cost only" when store_prompts is false).
+    transcripts = _load_transcripts(config) if config.privacy.store_prompts else {}
     inserted = 0
     with get_connection(config.storage.db_path) as conn:
         for file_path in files:
