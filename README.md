@@ -4,6 +4,15 @@ Local-only analyzer for ClaudeCode usage and estimated AWS Bedrock cost.
 
 ## Quick start
 
+With `uv` (one command — initializes on first run, then launches the UI with
+background log watching):
+
+```bash
+uv run claude-meter start   # or: uv run cm start
+```
+
+With `pip`:
+
 ```bash
 pip install -e .
 claude-meter init
@@ -61,6 +70,7 @@ Records without a `uuid` are assigned a deterministic synthetic ID so the
 | `claude-meter watch` | Watch configured data dir (`watchdog` or polling) |
 | `claude-meter ui` | Launch the Streamlit UI |
 | `claude-meter ui --watch [--poll N]` | Watch logs while UI runs |
+| `claude-meter start` | First-run init, then launch the UI with log watching |
 | `claude-meter pricing update [--force]` | Refresh Bedrock pricing cache |
 | `claude-meter config` | Show the config file path |
 
