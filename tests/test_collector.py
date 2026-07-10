@@ -1,10 +1,11 @@
 import json
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
 from claude_meter.collector import collect_files, derive_project, parse_incremental
 from claude_meter.config import load_config
-from claude_meter.db import init_db
+from claude_meter.db import get_connection, init_db
 
 
 def test_collect_files_finds_jsonl(temp_home: Path, sample_project_jsonl: Path) -> None:
@@ -17,6 +18,7 @@ def test_parse_incremental_inserts_record(temp_home: Path, sample_project_jsonl:
     config = load_config()
     init_db(config.storage.db_path)
     inserted = parse_incremental(config)
+    # Only the assistant record becomes a billing row; the user record does not.
     assert inserted == 1
     # second run is idempotent
     assert parse_incremental(config) == 0
@@ -25,10 +27,6 @@ def test_parse_incremental_inserts_record(temp_home: Path, sample_project_jsonl:
 def test_parse_incremental_stores_configured_region(
     temp_home: Path, sample_project_jsonl: Path
 ) -> None:
-    from contextlib import closing
-
-    from claude_meter.db import get_connection
-
     config = load_config()
     config.claude.region = "eu-west-1"
     init_db(config.storage.db_path)
@@ -58,120 +56,276 @@ def test_derive_project_from_git_dir(tmp_path: Path) -> None:
     assert repo == "example/my-project"
 
 
-def test_response_time_computed_from_transcript(
-    temp_home: Path, sample_project_jsonl: Path, sample_transcript_jsonl: Path
+def test_prompt_and_response_extracted_from_pair(
+    temp_home: Path, sample_project_jsonl: Path
 ) -> None:
-    from claude_meter.collector import _load_transcripts, _compute_response_time, _parse_iso_ts
+    """user->assistant ペアから prompt_text/response_text/response_time_ms が抽出されること。
 
+    prompt_text は人間発話の user レコードの content 文字列、response_text は
+    assistant レコード自身の content のうち type=="text" ブロックのみ(thinking は除外)。
+    """
     config = load_config()
-    transcripts = _load_transcripts(config)
-    key = ("sess-001", "req-001")
-    assert key in transcripts
-    prompt_text, response_text, _ = transcripts[key]
-    assert prompt_text == "hello"
-    assert response_text == "world"
+    init_db(config.storage.db_path)
+    parse_incremental(config)
+    with closing(get_connection(config.storage.db_path)) as conn:
+        row = conn.execute(
+            "SELECT request_id, prompt_text, response_text, response_time_ms "
+            "FROM requests WHERE session_id = 'sess-001'"
+        ).fetchone()
+    assert row is not None
+    # request_id defaults to the assistant record's uuid.
+    assert row["request_id"] == "a1"
+    assert row["prompt_text"] == "hello"
+    # thinking block excluded; only the text block survives.
+    assert row["response_text"] == "world"
+    # 10:00:00 - 09:59:58 == 2 seconds.
+    assert row["response_time_ms"] == 2000
+
+
+def test_compute_response_time_pure_function() -> None:
+    from claude_meter.collector import _compute_response_time, _parse_iso_ts
+
     duration = _compute_response_time(
-        "sess-001", "req-001", _parse_iso_ts("2026-07-08T10:00:00.000Z"), transcripts
+        _parse_iso_ts("2026-07-08T09:59:58Z"), _parse_iso_ts("2026-07-08T10:00:00Z")
     )
     assert duration == 2000
+    # Non-monotonic timestamps must clamp to 0, never go negative.
+    clamped = _compute_response_time(
+        _parse_iso_ts("2026-07-08T10:00:05Z"), _parse_iso_ts("2026-07-08T10:00:00Z")
+    )
+    assert clamped == 0
 
 
-def test_collect_survives_list_content_and_missing_timestamp(temp_home: Path) -> None:
-    from contextlib import closing
-    from claude_meter.db import get_connection
-
+def test_response_text_extracts_only_text_blocks_and_missing_timestamp_skipped(
+    temp_home: Path,
+) -> None:
+    """assistant.content がブロック配列でも text ブロックのみ連結され、timestamp 欠損行は
+    例外にせずスキップされること。"""
     config = load_config()
     init_db(config.storage.db_path)
     projects = temp_home / ".claude" / "projects" / "demo"
     projects.mkdir(parents=True)
-    rec_a = {
+    user_rec = {
+        "type": "user",
+        "uuid": "u1",
+        "parentUuid": None,
+        "timestamp": "2026-07-08T09:59:59Z",
+        "cwd": "/x",
+        "sessionId": "s1",
+        "message": {"role": "user", "content": "ask something"},
+    }
+    asst_ok = {
         "type": "assistant",
+        "uuid": "a1",
+        "parentUuid": "u1",
         "timestamp": "2026-07-08T10:00:00Z",
         "cwd": "/x",
         "sessionId": "s1",
-        "requestId": "req-A",
-        "message": {"model": "claude-sonnet-4-5-20260701", "usage": {"input_tokens": 10}},
+        "message": {
+            "model": "claude-sonnet-4-5-20260701",
+            "content": [
+                {"type": "text", "text": "hi "},
+                {"type": "tool_use", "id": "t1", "name": "bash", "input": {}},
+                {"type": "text", "text": "there"},
+            ],
+            "usage": {"input_tokens": 10},
+        },
     }
-    rec_b = {
+    asst_no_ts = {
         "type": "assistant",
+        "uuid": "a2",
+        "parentUuid": "a1",
         "cwd": "/x",
         "sessionId": "s1",
-        "requestId": "req-B",
         "message": {"model": "m", "usage": {}},
     }  # missing timestamp -> must be skipped, not crash
     (projects / "s1.jsonl").write_text(
-        json.dumps(rec_a) + "\n" + json.dumps(rec_b) + "\n", encoding="utf-8"
-    )
-    transcripts = temp_home / ".claude" / "transcripts"
-    transcripts.mkdir(parents=True)
-    user_rec = {
-        "type": "user",
-        "timestamp": "2026-07-08T09:59:59Z",
-        "sessionId": "s1",
-        "requestId": "req-A",
-        "message": {
-            "content": [
-                {"type": "text", "text": "hello "},
-                {"type": "text", "text": "world"},
-            ]
-        },
-    }
-    asst_rec = {
-        "type": "assistant",
-        "timestamp": "2026-07-08T10:00:00Z",
-        "sessionId": "s1",
-        "requestId": "req-A",
-        "message": {"content": [{"type": "text", "text": "hi there"}]},
-    }
-    (transcripts / "s1.jsonl").write_text(
-        json.dumps(user_rec) + "\n" + json.dumps(asst_rec) + "\n", encoding="utf-8"
+        json.dumps(user_rec) + "\n" + json.dumps(asst_ok) + "\n" + json.dumps(asst_no_ts) + "\n",
+        encoding="utf-8",
     )
 
     inserted = parse_incremental(config)  # must NOT raise
-    assert inserted == 1  # rec_a inserted; rec_b (no timestamp) skipped
+    assert inserted == 1  # asst_ok inserted; asst_no_ts (no timestamp) skipped
     with closing(get_connection(config.storage.db_path)) as conn:
         row = conn.execute(
-            "SELECT prompt_text, response_text FROM requests WHERE request_id = 'req-A'"
+            "SELECT prompt_text, response_text FROM requests WHERE request_id = 'a1'"
         ).fetchone()
-        assert row["prompt_text"] == "hello world"
+        assert row["prompt_text"] == "ask something"
         assert row["response_text"] == "hi there"
 
 
-def test_response_time_computed_when_request_id_missing(temp_home: Path) -> None:
-    """requestId が欠損しているレコードでもトランスクリプト照合が成功すること。"""
-    from contextlib import closing
-    from claude_meter.db import get_connection
-
+def test_long_parent_chain_resolves_human_prompt(temp_home: Path) -> None:
+    """tool_use/tool_result を挟んだ 20 ホップ超の親鎖でも、parentUuid を遡って
+    人間発話まで到達し prompt_text を解決できること(20 のような小さいホップ上限では失敗する)。"""
     config = load_config()
     init_db(config.storage.db_path)
     projects = temp_home / ".claude" / "projects" / "demo"
     projects.mkdir(parents=True)
-    rec_a = {
-        "type": "assistant",
-        "timestamp": "2026-07-08T10:00:00Z",
-        "cwd": "/x",
-        "sessionId": "s1",
-        # requestId is intentionally absent
-        "message": {"model": "m", "usage": {"input_tokens": 5}},
-    }
-    (projects / "s1.jsonl").write_text(json.dumps(rec_a) + "\n", encoding="utf-8")
 
-    transcripts = temp_home / ".claude" / "transcripts"
-    transcripts.mkdir(parents=True)
+    records: list[dict[str, object]] = [
+        {
+            "type": "user",
+            "uuid": "u0",
+            "parentUuid": None,
+            "timestamp": "2026-07-08T10:00:00Z",
+            "cwd": "/x",
+            "sessionId": "s-chain",
+            "message": {"role": "user", "content": "the real question"},
+        }
+    ]
+    prev = "u0"
+    n_iterations = 25
+    for i in range(1, n_iterations + 1):
+        a_uuid = f"a{i}"
+        records.append(
+            {
+                "type": "assistant",
+                "uuid": a_uuid,
+                "parentUuid": prev,
+                "timestamp": f"2026-07-08T10:{i:02d}:00Z",
+                "cwd": "/x",
+                "sessionId": "s-chain",
+                "message": {
+                    "model": "m",
+                    "content": [{"type": "tool_use", "id": f"t{i}", "name": "bash", "input": {}}],
+                    "usage": {"input_tokens": 1},
+                },
+            }
+        )
+        tr_uuid = f"tr{i}"
+        records.append(
+            {
+                "type": "user",
+                "uuid": tr_uuid,
+                "parentUuid": a_uuid,
+                "timestamp": f"2026-07-08T10:{i:02d}:05Z",
+                "cwd": "/x",
+                "sessionId": "s-chain",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": f"t{i}", "content": "ok"}],
+                },
+            }
+        )
+        prev = tr_uuid
+    records.append(
+        {
+            "type": "assistant",
+            "uuid": "a-final",
+            "parentUuid": prev,
+            "timestamp": "2026-07-08T11:00:00Z",
+            "cwd": "/x",
+            "sessionId": "s-chain",
+            "message": {
+                "model": "m",
+                "content": [{"type": "text", "text": "final answer"}],
+                "usage": {"input_tokens": 2},
+            },
+        }
+    )
+    (projects / "s-chain.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in records), encoding="utf-8"
+    )
+
+    parse_incremental(config)
+    with closing(get_connection(config.storage.db_path)) as conn:
+        # The final assistant is > 20 hops from the human utterance.
+        final = conn.execute(
+            "SELECT prompt_text, response_text FROM requests WHERE request_id = 'a-final'"
+        ).fetchone()
+        # A mid-chain tool_use assistant also resolves to the same human prompt.
+        mid = conn.execute(
+            "SELECT prompt_text FROM requests WHERE request_id = 'a20'"
+        ).fetchone()
+    assert final["prompt_text"] == "the real question"
+    assert final["response_text"] == "final answer"
+    assert mid["prompt_text"] == "the real question"
+
+
+def test_batch_boundary_prompt_resolved_via_sync_state(temp_home: Path) -> None:
+    """1回目の collect で user 行のみ、2回目で対応する assistant 行を取り込むシナリオでも、
+    sync_state に永続化した直近人間発話コンテキスト経由で prompt_text が解決されること。"""
+    config = load_config()
+    init_db(config.storage.db_path)
+    projects = temp_home / ".claude" / "projects" / "demo"
+    projects.mkdir(parents=True)
+    log = projects / "s-batch.jsonl"
+
     user_rec = {
         "type": "user",
-        "timestamp": "2026-07-08T09:59:59Z",
+        "uuid": "u1",
+        "parentUuid": None,
+        "timestamp": "2026-07-08T09:59:58Z",
+        "cwd": "/x",
+        "sessionId": "s-batch",
+        "message": {"role": "user", "content": "batched prompt"},
+    }
+    log.write_text(json.dumps(user_rec) + "\n", encoding="utf-8")
+
+    # Batch 1: only the human user record is present -> no billing rows yet.
+    assert parse_incremental(config) == 0
+
+    asst_rec = {
+        "type": "assistant",
+        "uuid": "a1",
+        "parentUuid": "u1",
+        "timestamp": "2026-07-08T10:00:00Z",
+        "cwd": "/x",
+        "sessionId": "s-batch",
+        "message": {
+            "model": "m",
+            "content": [{"type": "text", "text": "batched response"}],
+            "usage": {"input_tokens": 5},
+        },
+    }
+    with log.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(asst_rec) + "\n")
+
+    # Batch 2: the assistant's parent (u1) is NOT in this batch's in-memory
+    # window; resolution must fall back to the persisted sync_state context.
+    assert parse_incremental(config) == 1
+
+    with closing(get_connection(config.storage.db_path)) as conn:
+        row = conn.execute(
+            "SELECT prompt_text, response_text, response_time_ms "
+            "FROM requests WHERE request_id = 'a1'"
+        ).fetchone()
+    assert row["prompt_text"] == "batched prompt"
+    assert row["response_text"] == "batched response"
+    assert row["response_time_ms"] == 2000
+
+
+def test_store_prompts_false_computes_response_time_only(temp_home: Path) -> None:
+    """privacy.store_prompts=false のとき prompt_text/response_text は None だが、
+    response_time_ms はタイムスタンプのみで算出できるため常に記録されること(D6)。"""
+    config = load_config()
+    config.privacy.store_prompts = False
+    init_db(config.storage.db_path)
+    projects = temp_home / ".claude" / "projects" / "demo"
+    projects.mkdir(parents=True)
+    user_rec = {
+        "type": "user",
+        "uuid": "u1",
+        "parentUuid": None,
+        "timestamp": "2026-07-08T09:59:58Z",
+        "cwd": "/x",
         "sessionId": "s1",
-        # requestId is also absent in the transcript source
-        "message": {"content": "hello"},
+        "message": {"role": "user", "content": "secret prompt"},
     }
     asst_rec = {
         "type": "assistant",
+        "uuid": "a1",
+        "parentUuid": "u1",
         "timestamp": "2026-07-08T10:00:00Z",
+        "cwd": "/x",
         "sessionId": "s1",
-        "message": {"content": "world"},
+        "message": {
+            "model": "m",
+            "content": [{"type": "text", "text": "secret response"}],
+            "usage": {"input_tokens": 10},
+        },
     }
-    (transcripts / "s1.jsonl").write_text(
+    (projects / "s1.jsonl").write_text(
         json.dumps(user_rec) + "\n" + json.dumps(asst_rec) + "\n", encoding="utf-8"
     )
 
@@ -179,68 +333,87 @@ def test_response_time_computed_when_request_id_missing(temp_home: Path) -> None
     assert inserted == 1
     with closing(get_connection(config.storage.db_path)) as conn:
         row = conn.execute(
-            "SELECT prompt_text, response_text, response_time_ms FROM requests WHERE session_id = 's1'"
+            "SELECT prompt_text, response_text, response_time_ms "
+            "FROM requests WHERE session_id = 's1'"
         ).fetchone()
-        assert row["prompt_text"] == "hello"
-        assert row["response_text"] == "world"
-        assert row["response_time_ms"] == 1000
+        assert row["prompt_text"] is None
+        assert row["response_text"] is None
+        # response_time_ms is decoupled from store_prompts and still computed.
+        assert row["response_time_ms"] == 2000
 
 
-def test_missing_request_id_uses_synthetic_id(temp_home: Path) -> None:
-    """requestId 欠損時、DB の request_id が missing-{ファイル名}-{行番号} 形式になること。"""
-    from contextlib import closing
-    from claude_meter.db import get_connection
-
+def test_missing_uuid_uses_synthetic_id(temp_home: Path) -> None:
+    """uuid 欠損時、DB の request_id が missing-{ファイル名}-{行番号} 形式になること。"""
     config = load_config()
     init_db(config.storage.db_path)
     projects = temp_home / ".claude" / "projects" / "demo"
     projects.mkdir(parents=True)
-    rec_with_id = {
+    user_rec = {
+        "type": "user",
+        "uuid": "u1",
+        "parentUuid": None,
+        "timestamp": "2026-07-08T09:59:59Z",
+        "cwd": "/x",
+        "sessionId": "s-syn",
+        "message": {"role": "user", "content": "hi"},
+    }
+    asst_no_uuid = {
         "type": "assistant",
+        # uuid intentionally absent -> synthesized as missing-log.jsonl-2
+        "parentUuid": "u1",
         "timestamp": "2026-07-08T10:00:00Z",
         "cwd": "/x",
         "sessionId": "s-syn",
-        "requestId": "req-present",
-        "message": {"model": "m", "usage": {"input_tokens": 1}},
-    }
-    rec_missing = {
-        "type": "assistant",
-        "timestamp": "2026-07-08T10:00:01Z",
-        "cwd": "/x",
-        "sessionId": "s-syn",
-        # requestId is intentionally absent -> synthesized as missing-log.jsonl-2
         "message": {"model": "m", "usage": {"input_tokens": 2}},
     }
-    # line 1 = rec_with_id, line 2 = rec_missing (line_no is 1-based)
+    # line 1 = user, line 2 = assistant (line_no is 1-based)
     (projects / "log.jsonl").write_text(
-        json.dumps(rec_with_id) + "\n" + json.dumps(rec_missing) + "\n",
+        json.dumps(user_rec) + "\n" + json.dumps(asst_no_uuid) + "\n",
         encoding="utf-8",
     )
 
     inserted = parse_incremental(config)
-    assert inserted == 2
+    assert inserted == 1
     with closing(get_connection(config.storage.db_path)) as conn:
         row = conn.execute(
-            "SELECT request_id FROM requests WHERE session_id = 's-syn' AND input_tokens = 2"
+            "SELECT request_id FROM requests WHERE session_id = 's-syn'"
         ).fetchone()
         assert row["request_id"] == "missing-log.jsonl-2"
 
 
+def test_reparse_truncates_and_rebuilds(temp_home: Path, sample_project_jsonl: Path) -> None:
+    """--reparse 相当(reparse=True)で requests/sync_state を truncate してから
+    行0から全再取込され、増分状態に関係なく再構築されること(D7)。"""
+    config = load_config()
+    init_db(config.storage.db_path)
+
+    assert parse_incremental(config) == 1
+    # Incremental run is a no-op once sync_state is caught up.
+    assert parse_incremental(config) == 0
+
+    # reparse must wipe sync_state + requests and re-ingest from line 0.
+    assert parse_incremental(config, reparse=True) == 1
+
+    with closing(get_connection(config.storage.db_path)) as conn:
+        rows = conn.execute("SELECT request_id, prompt_text FROM requests").fetchall()
+    assert len(rows) == 1
+    assert rows[0]["request_id"] == "a1"
+    assert rows[0]["prompt_text"] == "hello"
+
+
 def test_parse_incremental_survives_unreadable_file(temp_home: Path) -> None:
     """処理対象の .jsonl が open 失敗しても例外を出さず他ファイルは挿入され続けること。"""
-    from contextlib import closing
-    from claude_meter.db import get_connection
-
     config = load_config()
     init_db(config.storage.db_path)
     projects = temp_home / ".claude" / "projects" / "demo"
     projects.mkdir(parents=True)
     good = {
         "type": "assistant",
+        "uuid": "u-good",
+        "parentUuid": None,
         "timestamp": "2026-07-08T10:00:00Z",
         "cwd": "/x",
         "sessionId": "s-good",
-        "requestId": "req-good",
         "message": {"model": "m", "usage": {"input_tokens": 7}},
     }
     (projects / "good.jsonl").write_text(json.dumps(good) + "\n", encoding="utf-8")
@@ -253,7 +426,7 @@ def test_parse_incremental_survives_unreadable_file(temp_home: Path) -> None:
     with closing(get_connection(config.storage.db_path)) as conn:
         row = conn.execute("SELECT request_id FROM requests WHERE session_id = 's-good'").fetchone()
         assert row is not None
-        assert row["request_id"] == "req-good"
+        assert row["request_id"] == "u-good"
         # the skipped file must not leave a partial sync_state entry
         bad_state = conn.execute(
             "SELECT 1 FROM sync_state WHERE file_path = ?",
@@ -265,35 +438,35 @@ def test_parse_incremental_survives_unreadable_file(temp_home: Path) -> None:
 def test_collect_survives_null_or_non_string_model(temp_home: Path) -> None:
     """message.model が null / 数値 / message 自体が非dict でも normalize_model_name()
     の AttributeError で例外終了せず、'unknown' として取り込みを継続すること。"""
-    from contextlib import closing
-    from claude_meter.db import get_connection
-
     config = load_config()
     init_db(config.storage.db_path)
     projects = temp_home / ".claude" / "projects" / "demo"
     projects.mkdir(parents=True)
     rec_null_model = {
         "type": "assistant",
+        "uuid": "u-null",
+        "parentUuid": None,
         "timestamp": "2026-07-08T10:00:00Z",
         "cwd": "/x",
         "sessionId": "s-null",
-        "requestId": "req-null",
         "message": {"model": None, "usage": {"input_tokens": 1}},
     }
     rec_numeric_model = {
         "type": "assistant",
+        "uuid": "u-numeric",
+        "parentUuid": "u-null",
         "timestamp": "2026-07-08T10:00:01Z",
         "cwd": "/x",
         "sessionId": "s-null",
-        "requestId": "req-numeric",
         "message": {"model": 123, "usage": {"input_tokens": 2}},
     }
     rec_null_message = {
         "type": "assistant",
+        "uuid": "u-nullmsg",
+        "parentUuid": "u-numeric",
         "timestamp": "2026-07-08T10:00:02Z",
         "cwd": "/x",
         "sessionId": "s-null",
-        "requestId": "req-nullmsg",
         "message": None,
     }
     (projects / "s-null.jsonl").write_text(
@@ -315,9 +488,9 @@ def test_collect_survives_null_or_non_string_model(temp_home: Path) -> None:
                 "SELECT request_id, model FROM requests WHERE session_id = 's-null'"
             ).fetchall()
         }
-        assert rows["req-null"] == "unknown"
-        assert rows["req-numeric"] == "unknown"
-        assert rows["req-nullmsg"] == "unknown"
+        assert rows["u-null"] == "unknown"
+        assert rows["u-numeric"] == "unknown"
+        assert rows["u-nullmsg"] == "unknown"
         # sync_state must have advanced past all 3 lines, not stalled on the crash.
         state = conn.execute(
             "SELECT last_line FROM sync_state WHERE file_path = ?",
@@ -330,9 +503,7 @@ def test_insert_usage_conflict_updates_stale_attributes(temp_home: Path) -> None
     """同じ (session_id, request_id) を再取り込みしたとき、token 以外の属性
     (timestamp/project/git_repository/model) も新値に更新され、トークン数の変化によって
     古くなった region/cost_usd は再計算のため NULL にリセットされること。"""
-    from contextlib import closing
     from claude_meter.collector import _insert_usage
-    from claude_meter.db import get_connection
     from claude_meter.models import UsageRecord
 
     config = load_config()
@@ -388,9 +559,6 @@ def test_parse_incremental_reprocessed_existing_row_not_counted_as_insert(
     temp_home: Path,
     sample_project_jsonl: Path,
 ) -> None:
-    from contextlib import closing
-    from claude_meter.db import get_connection
-
     config = load_config()
     init_db(config.storage.db_path)
     assert parse_incremental(config) == 1
@@ -400,133 +568,3 @@ def test_parse_incremental_reprocessed_existing_row_not_counted_as_insert(
         conn.commit()
 
     assert parse_incremental(config) == 0
-
-
-def test_store_prompts_false_skips_transcript_capture(temp_home: Path) -> None:
-    """privacy.store_prompts=false のとき、プロンプト本文・応答本文・応答時間を一切
-    記録しないこと(設計「トークン数・コストのみ記録」+ 計画Task7 のゲートに準拠、乖離5回帰)。"""
-    from contextlib import closing
-    from claude_meter.db import get_connection
-
-    config = load_config()
-    config.privacy.store_prompts = False
-    init_db(config.storage.db_path)
-    projects = temp_home / ".claude" / "projects" / "demo"
-    projects.mkdir(parents=True)
-    (projects / "s1.jsonl").write_text(
-        json.dumps(
-            {
-                "type": "assistant",
-                "timestamp": "2026-07-08T10:00:00Z",
-                "cwd": "/x",
-                "sessionId": "s1",
-                "requestId": "req-A",
-                "message": {"model": "m", "usage": {"input_tokens": 10}},
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    transcripts = temp_home / ".claude" / "transcripts"
-    transcripts.mkdir(parents=True)
-    (transcripts / "s1.jsonl").write_text(
-        json.dumps(
-            {
-                "type": "user",
-                "timestamp": "2026-07-08T09:59:59Z",
-                "sessionId": "s1",
-                "requestId": "req-A",
-                "message": {"content": "secret prompt"},
-            }
-        )
-        + "\n"
-        + json.dumps(
-            {
-                "type": "assistant",
-                "timestamp": "2026-07-08T10:00:00Z",
-                "sessionId": "s1",
-                "requestId": "req-A",
-                "message": {"content": "secret response"},
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    inserted = parse_incremental(config)
-    assert inserted == 1
-    with closing(get_connection(config.storage.db_path)) as conn:
-        row = conn.execute(
-            "SELECT prompt_text, response_text, response_time_ms "
-            "FROM requests WHERE session_id = 's1'"
-        ).fetchone()
-        assert row["prompt_text"] is None
-        assert row["response_text"] is None
-        assert row["response_time_ms"] is None
-
-
-def test_parse_incremental_backfills_existing_request_when_transcript_arrives_later(
-    temp_home: Path,
-) -> None:
-    from contextlib import closing
-
-    from claude_meter.db import get_connection
-
-    config = load_config()
-    init_db(config.storage.db_path)
-    projects = temp_home / ".claude" / "projects" / "demo"
-    projects.mkdir(parents=True)
-    (projects / "s-late.jsonl").write_text(
-        json.dumps(
-            {
-                "type": "assistant",
-                "timestamp": "2026-07-08T10:00:00Z",
-                "cwd": "/x",
-                "sessionId": "s-late",
-                "requestId": "req-late",
-                "message": {"model": "m", "usage": {"input_tokens": 10}},
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    assert parse_incremental(config) == 1
-
-    transcripts = temp_home / ".claude" / "transcripts"
-    transcripts.mkdir(parents=True)
-    (transcripts / "s-late.jsonl").write_text(
-        json.dumps(
-            {
-                "type": "user",
-                "timestamp": "2026-07-08T09:59:58Z",
-                "sessionId": "s-late",
-                "requestId": "req-late",
-                "message": {"content": "late prompt"},
-            }
-        )
-        + "\n"
-        + json.dumps(
-            {
-                "type": "assistant",
-                "timestamp": "2026-07-08T10:00:00Z",
-                "sessionId": "s-late",
-                "requestId": "req-late",
-                "message": {"content": "late response"},
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    assert parse_incremental(config) == 0
-
-    with closing(get_connection(config.storage.db_path)) as conn:
-        row = conn.execute(
-            "SELECT prompt_text, response_text, response_time_ms "
-            "FROM requests WHERE session_id = 's-late' AND request_id = 'req-late'"
-        ).fetchone()
-    assert row is not None
-    assert row["prompt_text"] == "late prompt"
-    assert row["response_text"] == "late response"
-    assert row["response_time_ms"] == 2000

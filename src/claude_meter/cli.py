@@ -39,10 +39,15 @@ def init() -> None:
 
 
 @main.command()
-def collect() -> None:
+@click.option(
+    "--reparse",
+    is_flag=True,
+    help="Truncate stored requests and re-ingest every JSONL file from the start.",
+)
+def collect(reparse: bool) -> None:
     """Parse ClaudeCode JSONL logs once."""
     config = _config_and_db()
-    inserted = parse_incremental(config)
+    inserted = parse_incremental(config, reparse=reparse)
     fill_missing_costs(config)
     click.echo(f"Inserted {inserted} new records.")
 
