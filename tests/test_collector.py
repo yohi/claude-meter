@@ -590,3 +590,28 @@ def test_is_human_user_empty_content_list_is_not_human() -> None:
     assert _is_human_user(text_block) is True
     plain_string = {"type": "user", "message": {"content": "hi"}}
     assert _is_human_user(plain_string) is True
+
+
+def test_extract_text_blocks_handles_null_and_non_string_text() -> None:
+    """text ブロックの ``text`` が null や非文字列でも TypeError にならず空文字列扱いされること。
+
+    ``block.get("text", "")`` はキーが存在し値が None の場合はデフォルト値が使われず None を
+    そのまま返すため、以前は ``"".join`` に None が渡り TypeError となっていた。その回帰を検証する。
+    """
+    from claude_meter.collector import _extract_text_blocks
+
+    # text が null のブロックは空文字列として扱われ、他の正常なブロックと連結できる。
+    null_text = [{"type": "text", "text": "hi "}, {"type": "text", "text": None}, {"type": "text", "text": "there"}]
+    assert _extract_text_blocks(null_text) == "hi there"
+
+    # text が非文字列(数値など)のブロックも空文字列として扱われる。
+    non_string_text = [{"type": "text", "text": 123}]
+    assert _extract_text_blocks(non_string_text) == ""
+
+    # text キー自体が欠落している場合は従来どおり空文字列。
+    missing_text = [{"type": "text"}]
+    assert _extract_text_blocks(missing_text) == ""
+
+    # 通常の文字列 text ブロックは変更なく連結される。
+    normal_text = [{"type": "text", "text": "ok"}]
+    assert _extract_text_blocks(normal_text) == "ok"

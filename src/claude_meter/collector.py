@@ -105,13 +105,17 @@ def _extract_text_blocks(content: object) -> str:
 
     ``thinking`` and ``tool_use`` blocks are ignored. A bare string content is
     returned verbatim (human ``user`` records store their prompt this way).
+    A block's ``text`` value is normalized to a string; ``null`` or other
+    non-string values contribute an empty string instead of raising
+    ``TypeError`` from ``"".join``.
     """
     if isinstance(content, list):
-        return "".join(
-            block.get("text", "")
-            for block in content
-            if isinstance(block, dict) and block.get("type") == "text"
-        )
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                text = block.get("text", "")
+                parts.append(text if isinstance(text, str) else "")
+        return "".join(parts)
     if isinstance(content, str):
         return content
     return ""
