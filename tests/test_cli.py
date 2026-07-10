@@ -190,3 +190,141 @@ def test_ui_without_watch_flag(temp_home: Path, monkeypatch: pytest.MonkeyPatch)
     result = runner.invoke(main, ["ui"])
     assert result.exit_code == 0
     assert "watch_called" not in captured
+
+
+def test_start_first_launch_initializes_and_collects(
+    temp_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`start` on first launch saves config, collects logs, and launches Streamlit."""
+    captured: dict[str, object] = {}
+
+    def fake_parse_incremental(config, reparse=False):
+        captured["parse_called"] = True
+        return 7
+
+    def fake_fill_missing_costs(config, region=None):
+        captured["fill_called"] = True
+        return 0
+
+    def fake_watch(config, poll_interval=5.0):
+        captured["watch_call"] = (config, poll_interval)
+
+    def fake_run(cmd, check=True):
+        captured["cmd"] = cmd
+
+        class _Result:
+            returncode = 0
+
+        return _Result()
+
+    monkeypatch.setattr("claude_meter.cli.parse_incremental", fake_parse_incremental)
+    monkeypatch.setattr("claude_meter.cli.fill_missing_costs", fake_fill_missing_costs)
+    monkeypatch.setattr("claude_meter.cli.watch", fake_watch)
+    monkeypatch.setattr("claude_meter.cli.subprocess.run", fake_run)
+
+    config_path = temp_home / ".claude-meter" / "config.yaml"
+    assert not config_path.exists()
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["start"])
+    assert result.exit_code == 0
+    assert config_path.exists()
+    assert captured.get("parse_called") is True
+    assert captured.get("fill_called") is True
+    assert "watch_call" in captured
+    assert "cmd" in captured
+
+
+def test_start_second_launch_skips_collect(
+    temp_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`start` with an existing config skips collection but still launches UI + watch."""
+    captured: dict[str, object] = {}
+
+    def fake_parse_incremental(config, reparse=False):
+        captured["parse_called"] = True
+        return 0
+
+    def fake_fill_missing_costs(config, region=None):
+        captured["fill_called"] = True
+        return 0
+
+    def fake_watch(config, poll_interval=5.0):
+        captured["watch_call"] = (config, poll_interval)
+
+    def fake_run(cmd, check=True):
+        captured["cmd"] = cmd
+
+        class _Result:
+            returncode = 0
+
+        return _Result()
+
+    monkeypatch.setattr("claude_meter.cli.parse_incremental", fake_parse_incremental)
+    monkeypatch.setattr("claude_meter.cli.fill_missing_costs", fake_fill_missing_costs)
+    monkeypatch.setattr("claude_meter.cli.watch", fake_watch)
+    monkeypatch.setattr("claude_meter.cli.subprocess.run", fake_run)
+
+    config_dir = temp_home / ".claude-meter"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "config.yaml").write_text("ui:\n  port: 8501\n", encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["start"])
+    assert result.exit_code == 0
+    assert "parse_called" not in captured
+    assert "fill_called" not in captured
+    assert "watch_call" in captured
+    assert "cmd" in captured
+
+
+def test_start_launches_streamlit_with_new_flags(
+    temp_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`start` passes the new Streamlit hardening flags to subprocess.run."""
+    captured: dict[str, list[str]] = {}
+
+    def fake_watch(config, poll_interval=5.0):
+        pass
+
+    def fake_run(cmd, check=True):
+        captured["cmd"] = cmd
+
+        class _Result:
+            returncode = 0
+
+        return _Result()
+
+    monkeypatch.setattr("claude_meter.cli.watch", fake_watch)
+    monkeypatch.setattr("claude_meter.cli.subprocess.run", fake_run)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["start"])
+    assert result.exit_code == 0
+    cmd = captured["cmd"]
+    assert cmd[cmd.index("--server.showEmailPrompt") + 1] == "false"
+    assert cmd[cmd.index("--client.toolbarMode") + 1] == "viewer"
+
+
+def test_ui_launches_streamlit_with_new_flags(
+    temp_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`ui` passes the new Streamlit hardening flags to subprocess.run."""
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(cmd, check=True):
+        captured["cmd"] = cmd
+
+        class _Result:
+            returncode = 0
+
+        return _Result()
+
+    monkeypatch.setattr("claude_meter.cli.subprocess.run", fake_run)
+    runner = CliRunner()
+    result = runner.invoke(main, ["ui"])
+    assert result.exit_code == 0
+    cmd = captured["cmd"]
+    assert cmd[cmd.index("--server.showEmailPrompt") + 1] == "false"
+    assert cmd[cmd.index("--client.toolbarMode") + 1] == "viewer"
+    assert cmd[cmd.index("--browser.gatherUsageStats") + 1] == "false"
