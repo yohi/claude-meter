@@ -1,7 +1,7 @@
 """Overview dashboard page."""
 
 from contextlib import closing
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, tzinfo
 import sqlite3
 from typing import Any
 
@@ -10,7 +10,7 @@ import pandas as pd
 import streamlit as st
 
 from claude_meter.db import get_connection
-from claude_meter.config import load_config
+from claude_meter.config import load_config, resolve_tzinfo
 from claude_meter.model_normalizer import display_model_name
 
 
@@ -31,12 +31,50 @@ def _summary_for_period(conn: sqlite3.Connection, start: str, end: str) -> dict[
     return dict(row)
 
 
-def _daily_cost(conn: sqlite3.Connection, start: str, end: str) -> pd.DataFrame:
+def _tz_offset_modifiers(tz: tzinfo) -> list[str]:
+    """Return SQLite ``date()`` modifiers shifting a UTC timestamp into ``tz``.
+
+    The timezone's *current* UTC offset is used (as of now); historical DST
+    transitions are intentionally ignored. Stored timestamps stay in UTC, so
+    this only affects display/aggregation-time day bucketing. A per-row exact
+    conversion would require correlated subqueries and is out of scope.
+
+    Examples: UTC+9 -> ``["+9 hours"]``, UTC-5 -> ``["-5 hours"]``,
+    UTC+5:30 -> ``["+5 hours", "+30 minutes"]``, UTC -> ``[]``.
+    """
+    offset = tz.utcoffset(datetime.now())
+    if offset is None:
+        return []
+    total_minutes = round(offset.total_seconds() / 60)
+    if total_minutes == 0:
+        return []
+    sign = "+" if total_minutes > 0 else "-"
+    hours, minutes = divmod(abs(total_minutes), 60)
+    modifiers = [f"{sign}{hours} hours"]
+    if minutes:
+        modifiers.append(f"{sign}{minutes} minutes")
+    return modifiers
+
+
+def _local_date_expr(tz_modifiers: list[str]) -> str:
+    """Build a ``date(timestamp, ...)`` SQL expression for local-day bucketing.
+
+    ``tz_modifiers`` come from :func:`_tz_offset_modifiers` (internally generated
+    fixed-offset strings such as ``"+9 hours"``, never user input), so they are
+    safe to inline as SQL literals. With no modifiers this is ``date(timestamp)``.
+    """
+    return "date(timestamp" + "".join(f", '{modifier}'" for modifier in tz_modifiers) + ")"
+
+
+def _daily_cost(
+    conn: sqlite3.Connection, start: str, end: str, tz_modifiers: list[str]
+) -> pd.DataFrame:
+    date_expr = _local_date_expr(tz_modifiers)
     rows = conn.execute(
-        """SELECT date(timestamp) AS date, SUM(cost_usd) AS cost
+        f"""SELECT {date_expr} AS date, SUM(cost_usd) AS cost
            FROM requests
            WHERE timestamp >= ? AND timestamp < ?
-           GROUP BY date(timestamp)
+           GROUP BY {date_expr}
            ORDER BY date""",
         (start, end),
     ).fetchall()
@@ -72,12 +110,15 @@ def _model_tokens(conn: sqlite3.Connection, start: str, end: str) -> pd.DataFram
     return pd.DataFrame(rows, columns=["model", "tokens"])
 
 
-def _daily_avg_response_time(conn: sqlite3.Connection, start: str, end: str) -> pd.DataFrame:
+def _daily_avg_response_time(
+    conn: sqlite3.Connection, start: str, end: str, tz_modifiers: list[str]
+) -> pd.DataFrame:
+    date_expr = _local_date_expr(tz_modifiers)
     rows = conn.execute(
-        """SELECT date(timestamp) AS date, AVG(response_time_ms) AS avg_response_time_ms
+        f"""SELECT {date_expr} AS date, AVG(response_time_ms) AS avg_response_time_ms
            FROM requests
            WHERE timestamp >= ? AND timestamp < ? AND response_time_ms IS NOT NULL
-           GROUP BY date(timestamp)
+           GROUP BY {date_expr}
            ORDER BY date""",
         (start, end),
     ).fetchall()
@@ -91,21 +132,42 @@ _TOP_COSTLY_PROMPTS_WITHOUT_TEXT = """SELECT timestamp, project, model, cost_usd
            ORDER BY cost_usd DESC NULLS LAST
            LIMIT ?"""
 
-_TOP_COSTLY_PROMPTS_WITH_TEXT = """SELECT timestamp, project, model, cost_usd, prompt_text
+# When prompts are shown, collapse identical prompt_text into a single row:
+# total_cost = SUM(cost_usd), occurrences = COUNT(*), latest_timestamp =
+# MAX(timestamp). ``project``/``model`` are bare columns, so SQLite resolves
+# them from the row holding the single MAX() aggregate (the latest execution).
+# Rows with NULL/empty prompt_text are excluded so they never merge into one
+# group.
+_TOP_COSTLY_PROMPTS_AGGREGATED = """SELECT
+               MAX(timestamp) AS latest_timestamp,
+               project,
+               model,
+               SUM(cost_usd) AS total_cost,
+               COUNT(*) AS occurrences,
+               prompt_text
            FROM requests
            WHERE timestamp >= ? AND timestamp < ?
-           ORDER BY cost_usd DESC NULLS LAST
+             AND prompt_text IS NOT NULL AND prompt_text != ''
+           GROUP BY prompt_text
+           ORDER BY total_cost DESC NULLS LAST
            LIMIT ?"""
 
 
 def _top_costly_prompts(
     conn: sqlite3.Connection, start: str, end: str, show_prompts: bool, limit: int = 10
 ) -> pd.DataFrame:
-    column_names = ["timestamp", "project", "model", "cost_usd"]
     if show_prompts:
-        column_names.append("prompt_text")
-        query = _TOP_COSTLY_PROMPTS_WITH_TEXT
+        column_names = [
+            "latest_timestamp",
+            "project",
+            "model",
+            "total_cost",
+            "occurrences",
+            "prompt_text",
+        ]
+        query = _TOP_COSTLY_PROMPTS_AGGREGATED
     else:
+        column_names = ["timestamp", "project", "model", "cost_usd"]
         query = _TOP_COSTLY_PROMPTS_WITHOUT_TEXT
     rows = conn.execute(query, (start, end, limit)).fetchall()
     return pd.DataFrame(rows, columns=column_names)
@@ -115,7 +177,9 @@ def render() -> None:
     config = load_config()
     st.title("claude-meter Overview")
     period = st.selectbox("Period", ["Today", "Last 7 days", "Last 30 days", "Custom"])
-    today = datetime.now(timezone.utc).date()
+    resolved_tz = resolve_tzinfo(config.ui.timezone)
+    tz_modifiers = _tz_offset_modifiers(resolved_tz)
+    today = datetime.now(resolved_tz).date()
     if period == "Today":
         start = today.isoformat()
         end = (today + timedelta(days=1)).isoformat()
@@ -137,7 +201,7 @@ def render() -> None:
         col2.metric("Input Tokens", f"{summary['total_input_tokens']:,}")
         col3.metric("Output Tokens", f"{summary['total_output_tokens']:,}")
 
-        daily = _daily_cost(conn, start, end)
+        daily = _daily_cost(conn, start, end, tz_modifiers)
         if not daily.empty:
             st.altair_chart(
                 alt.Chart(daily)
@@ -169,7 +233,7 @@ def render() -> None:
                 use_container_width=True,
             )
 
-        response_times = _daily_avg_response_time(conn, start, end)
+        response_times = _daily_avg_response_time(conn, start, end, tz_modifiers)
         if not response_times.empty:
             st.altair_chart(
                 alt.Chart(response_times)
@@ -182,4 +246,10 @@ def render() -> None:
         top = _top_costly_prompts(conn, start, end, config.privacy.show_prompts_in_ui)
         if not top.empty:
             st.subheader("Top Costly Prompts")
-            st.dataframe(top, use_container_width=True)
+            st.dataframe(
+                top,
+                use_container_width=True,
+                column_config={
+                    "prompt_text": st.column_config.TextColumn("prompt_text", width="large"),
+                },
+            )

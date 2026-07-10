@@ -74,13 +74,19 @@ def render() -> None:
         if sessions.empty:
             st.info("セッションが見つかりません。")
         else:
+            # Widen the long free-text columns so their content is readable
+            # without horizontal scrolling (word-wrap is not configurable here).
+            text_columns = {
+                "prompt_text": st.column_config.TextColumn("prompt_text", width="large"),
+                "response_text": st.column_config.TextColumn("response_text", width="large"),
+            }
             selected = st.selectbox("Session", sessions["session_id"].tolist())
             if selected:
                 requests_df = _session_requests(conn, selected, config.privacy.show_prompts_in_ui)
                 requests_df["model"] = requests_df["model"].apply(
                     lambda model: display_model_name(str(model))
                 )
-                st.dataframe(requests_df, use_container_width=True)
+                st.dataframe(requests_df, use_container_width=True, column_config=text_columns)
                 if config.privacy.show_prompts_in_ui:
                     search = st.text_input("Search prompts/responses")
                     if search:
@@ -89,4 +95,8 @@ def render() -> None:
                         ) | requests_df["response_text"].str.contains(
                             search, na=False, case=False, regex=False
                         )
-                        st.dataframe(requests_df[mask], use_container_width=True)
+                        st.dataframe(
+                            requests_df[mask],
+                            use_container_width=True,
+                            column_config=text_columns,
+                        )
