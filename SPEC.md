@@ -58,14 +58,22 @@ records contain the inference result and token usage:
 }
 ```
 
-### Prompts: `<claude-data>/transcripts/<session-id>.jsonl`
+### Prompts and response times: extracted from project JSONL files
 
-Default: `~/.claude/transcripts/<session-id>.jsonl` on macOS/Linux,
-`%LOCALAPPDATA%\\Claude\\transcripts\\...` on Windows.
+Prompt/response bodies and response times are derived entirely from the project
+JSONL files (`~/.claude/projects/*/*.jsonl`). Each `assistant` record is one
+billing row:
 
-Same-`sessionId` transcript files provide the corresponding `user` and
-`assistant` message bodies. These are only read when `privacy.store_prompts` is
-`true`.
+- `response_text` is the concatenation of `type == "text"` blocks from the
+  record's `message.content` (thinking and tool_use blocks are excluded).
+- `prompt_text` is the nearest human `user` utterance found by walking the
+  `parentUuid` chain backward (tool_result-only user messages are skipped).
+- `response_time_ms` is the timestamp delta between the input record and the
+  assistant record, computed regardless of the `store_prompts` privacy setting.
+
+These fields are only populated when `privacy.store_prompts` is `true`; when
+`false`, `prompt_text` and `response_text` are `NULL`, but `response_time_ms`
+remains available.
 
 ### Auxiliary: `<claude-data>/history.jsonl`
 
@@ -79,29 +87,31 @@ display names; missing or malformed history data never blocks collection.
 
 - The collector scans the configured projects directory
   (`~/.claude/projects/*/*.jsonl` on macOS/Linux,
-  `%LOCALAPPDATA%\\Claude\\projects\\...` on Windows) and the configured
-  transcripts directory (`~/.claude/transcripts/*.jsonl` on macOS/Linux,
-  `%LOCALAPPDATA%\\Claude\\transcripts\\...` on Windows).
-- File changes are detected via `watchdog` (with polling fallback)
+  `%LOCALAPPDATA%\Claude\projects\...` on Windows).
+- File changes are detected via `watchdog` (with polling fallback).
 - A `sync_state` table tracks the last parsed position per file for
-  **incremental parsing**
-- Only new or changed lines are written to SQLite
-- File shrinkage (rotation/truncation) resets the parse position to zero
+  **incremental parsing**.
+- Only new or changed lines are written to SQLite.
+- File shrinkage (rotation/truncation) resets the parse position to zero.
 - JSONL lines with `UnicodeDecodeError` are handled with `errors="replace"` for
-  partial-fault tolerance
+  partial-fault tolerance.
+- Batch-boundary context (the most recent human-utterance prompt text and the
+  timestamp of the most recent input record) is carried over in `sync_state` so
+  that a later batch can resolve `prompt_text`/`response_time_ms` for an
+  `assistant` record whose parent `user` record was ingested in an earlier batch.
 
 ### Response time calculation
 
-`assistant` records do not include `durationMs`, so response time is estimated
-from the timestamp delta between the preceding `user` record and the
-`assistant` record sharing the same `requestId`. When `store_prompts` is
-`false`, transcripts are not read, so `response_time_ms` is not recorded.
+`response_time_ms` is calculated from the timestamp delta between the input
+record (the most recent `user` record) and the `assistant` record. This
+calculation is performed regardless of the `store_prompts` privacy setting,
+since it depends only on timestamps, not on message content.
 
 ### Synthetic request IDs
 
-Records without a `requestId` are assigned a deterministic synthetic ID
-(`missing-{file_name}-{line_no}`) to satisfy the `(session_id, request_id)`
-uniqueness constraint.
+Records with a `uuid` field use that as the `request_id`. Records without a
+`uuid` are assigned a deterministic synthetic ID (`missing-{file_name}-{line_no}`)
+to satisfy the `(session_id, request_id)` uniqueness constraint.
 
 ## SQLite schema
 
@@ -165,7 +175,14 @@ CREATE TABLE sync_state (
     file_path TEXT PRIMARY KEY,
     last_size INTEGER,
     last_line INTEGER,
-    last_modified DATETIME
+    last_modified DATETIME,
+    -- Batch-boundary carry-over context (see collector.parse_incremental):
+    -- the most recent human-utterance prompt text (already truncated), plus the
+    -- timestamp of the most recent input record, so a later batch can resolve
+    -- prompt_text/response_time_ms for an assistant whose parent user record was
+    -- ingested in an earlier batch.
+    pending_prompt_text TEXT,
+    last_input_ts DATETIME
 );
 ```
 
@@ -294,9 +311,8 @@ Launched via `claude-meter ui` at `http://127.0.0.1:8501`.
 
 ### Privacy controls
 
-- `privacy.store_prompts` — when `false`, prompt/response text is not stored,
-  transcripts are not read, and `response_time_ms` is not recorded; tokens,
-  cost, and request metadata are still retained.
+- `privacy.store_prompts` — when `false`, prompt/response text is not stored;
+  tokens, cost, response time, and request metadata are still retained.
 - `privacy.show_prompts_in_ui` — toggles visibility in the UI independently of
   storage
 
@@ -308,6 +324,7 @@ Tool name: `claude-meter` (alias `cm`)
 | --- | --- |
 | `claude-meter init` | Create config file and SQLite database |
 | `claude-meter collect` | Parse JSONL logs once and backfill costs |
+| `claude-meter collect --reparse` | Re-ingest all JSONL files from start |
 | `claude-meter watch [--poll N]` | Watch configured data dir for new data |
 | `claude-meter ui [--port N] [--host H]` | Launch the Streamlit UI |
 | `claude-meter pricing update [--force]` | Refresh Bedrock pricing cache |

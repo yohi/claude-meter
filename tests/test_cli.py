@@ -43,7 +43,7 @@ def test_pricing_update_force_monkeypatched(
 
 
 def test_collect_inserts_records(temp_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_parse_incremental(config):
+    def fake_parse_incremental(config, reparse=False):
         return 3
 
     def fake_fill_missing_costs(config, region=None):
@@ -55,6 +55,26 @@ def test_collect_inserts_records(temp_home: Path, monkeypatch: pytest.MonkeyPatc
     result = runner.invoke(main, ["collect"])
     assert result.exit_code == 0
     assert "Inserted 3 new records." in result.output
+
+
+def test_collect_reparse_passes_flag(temp_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`collect --reparse` は parse_incremental に reparse=True を渡すこと。"""
+    captured: dict[str, bool] = {}
+
+    def fake_parse_incremental(config, reparse=False):
+        captured["reparse"] = reparse
+        return 5
+
+    def fake_fill_missing_costs(config, region=None):
+        return 0
+
+    monkeypatch.setattr("claude_meter.cli.parse_incremental", fake_parse_incremental)
+    monkeypatch.setattr("claude_meter.cli.fill_missing_costs", fake_fill_missing_costs)
+    runner = CliRunner()
+    result = runner.invoke(main, ["collect", "--reparse"])
+    assert result.exit_code == 0
+    assert captured["reparse"] is True
+    assert "Inserted 5 new records." in result.output
 
 
 def test_ui_initializes_db_before_launch(temp_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:

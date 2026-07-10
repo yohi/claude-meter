@@ -18,30 +18,29 @@ refresh Bedrock pricing; everything else stays on your machine.
 
 By default, `store_prompts: true` records prompt/response text alongside usage
 metrics and metadata. Set `store_prompts: false` to skip storing prompt/response
-bodies and to stop reading transcripts. Usage metrics (tokens, cost) and request
-metadata (project, session, model, timestamp, etc.) are still retained. Because
-transcripts are not read, `response_time_ms` is also omitted.
+bodies. Usage metrics (tokens, cost) and request metadata (project, session,
+model, timestamp, etc.) are still retained. Response time (`response_time_ms`) is
+always calculated from timestamps, regardless of the `store_prompts` setting.
 
 Project names are derived from the `cwd` in each JSONL record (`.git/config` or
 directory name). The default Claude data directory's `history.jsonl`
 (e.g. `~/.claude/history.jsonl` on macOS/Linux,
-`%LOCALAPPDATA%\\Claude\\history.jsonl` on Windows) is used as an optional hint
+`%LOCALAPPDATA%\Claude\history.jsonl` on Windows) is used as an optional hint
 for project display names; missing history data never blocks collection.
 
-Records without a `requestId` are assigned a deterministic synthetic ID so the
+Records without a `uuid` are assigned a deterministic synthetic ID so the
 `(session_id, request_id)` uniqueness constraint remains valid.
 
 ## What it does
 
 - Parses ClaudeCode JSONL logs from the configured projects directory
   (default `~/.claude/projects/*/*.jsonl` on macOS/Linux,
-  `%LOCALAPPDATA%\\Claude\\projects\\...` on Windows) incrementally.
-- Pairs prompt/response bodies from the configured transcripts directory
-  (default `~/.claude/transcripts/*.jsonl` on macOS/Linux,
-  `%LOCALAPPDATA%\\Claude\\transcripts\\*.jsonl` on Windows) when
-  `store_prompts: true`, and estimates `response_time_ms` from the
-  and estimates `response_time_ms` from the user/assistant timestamp delta for
-  the same `requestId`.
+  `%LOCALAPPDATA%\Claude\projects\...` on Windows) incrementally.
+- Extracts prompt/response bodies and response times directly from the same
+  JSONL files: `response_text` is the concatenation of `type == "text"` blocks
+  from each `assistant` record's `message.content`; `prompt_text` is the nearest
+  human `user` utterance found by walking the `parentUuid` chain; `response_time_ms`
+  is the timestamp delta between the input and assistant records.
 - Estimates AWS Bedrock cost using cached per-model, per-region pricing.
 - Stores everything locally in `~/.claude-meter/data.db` (`requests`, `pricing`,
   `sync_state`, and `daily_summary` tables).
@@ -58,6 +57,7 @@ Records without a `requestId` are assigned a deterministic synthetic ID so the
 | --- | --- |
 | `claude-meter init` | Create config and SQLite database |
 | `claude-meter collect` | Parse JSONL logs once and backfill costs |
+| `claude-meter collect --reparse` | Re-ingest all JSONL files from start |
 | `claude-meter watch` | Watch configured data dir (`watchdog` or polling) |
 | `claude-meter ui` | Launch the Streamlit UI |
 | `claude-meter pricing update [--force]` | Refresh Bedrock pricing cache |

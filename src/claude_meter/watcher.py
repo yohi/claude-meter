@@ -44,7 +44,6 @@ def _start_observer(config: Config) -> Any | None:
     claude_dir = default_claude_dir()
     watch_dirs = {
         config.claude.projects_dir or claude_dir / "projects",
-        config.claude.transcripts_dir or claude_dir / "transcripts",
     }
     try:
         for watch_dir in watch_dirs:
@@ -62,7 +61,7 @@ def _start_observer(config: Config) -> Any | None:
 
 
 def watch(config: Config, poll_interval: float = 5.0) -> None:
-    """Watch project and transcript JSONL data indefinitely."""
+    """Watch project JSONL data indefinitely."""
     observer = _start_observer(config)
     if observer is not None:
         _safe_collect_once(config)

@@ -48,7 +48,14 @@ CREATE TABLE IF NOT EXISTS sync_state (
     file_path TEXT PRIMARY KEY,
     last_size INTEGER,
     last_line INTEGER,
-    last_modified DATETIME
+    last_modified DATETIME,
+    -- Batch-boundary carry-over context (see collector.parse_incremental):
+    -- the most recent human-utterance prompt text (already truncated), plus the
+    -- timestamp of the most recent input record, so a later batch can resolve
+    -- prompt_text/response_time_ms for an assistant whose parent user record was
+    -- ingested in an earlier batch.
+    pending_prompt_text TEXT,
+    last_input_ts DATETIME
 );
 
 -- project is part of the composite PRIMARY KEY and MUST remain NOT NULL.
@@ -87,4 +94,36 @@ def get_connection(db_path: Path) -> sqlite3.Connection:
 def init_db(db_path: Path) -> None:
     with closing(get_connection(db_path)) as conn:
         conn.executescript(SCHEMA_SQL)
+        migrate_sync_state(conn)
         conn.commit()
+
+
+# Columns added to sync_state after the initial release. Existing databases
+# created before these columns must be migrated in place (CREATE TABLE IF NOT
+# EXISTS never alters an existing table).
+_SYNC_STATE_CONTEXT_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("pending_prompt_text", "TEXT"),
+    ("last_input_ts", "DATETIME"),
+)
+
+
+def migrate_sync_state(conn: sqlite3.Connection) -> None:
+    """Add the batch-boundary context columns to a pre-existing sync_state table.
+
+    Idempotent: each column is only added when absent, so repeated calls (and
+    fresh databases that already have the columns from SCHEMA_SQL) are no-ops.
+
+    Also drops the obsolete ``pending_prompt_ts`` column left behind by an
+    earlier release. ``DROP COLUMN`` requires SQLite 3.35.0+; on older engines
+    the ``OperationalError`` is swallowed and the unused column simply lingers.
+    """
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(sync_state)")}
+    for name, decl in _SYNC_STATE_CONTEXT_COLUMNS:
+        if name not in existing:
+            conn.execute(f"ALTER TABLE sync_state ADD COLUMN {name} {decl}")
+    if "pending_prompt_ts" in existing:
+        try:
+            conn.execute("ALTER TABLE sync_state DROP COLUMN pending_prompt_ts")
+        except sqlite3.OperationalError:
+            # SQLite < 3.35.0 lacks DROP COLUMN; the unused column is harmless.
+            pass

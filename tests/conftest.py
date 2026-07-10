@@ -21,18 +21,39 @@ def temp_home(monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.fixture
 def sample_project_jsonl(temp_home: Path) -> Path:
-    """Create a fake ClaudeCode projects directory with one assistant record."""
+    """Create a fake ClaudeCode projects file with one human user + assistant turn.
+
+    Mirrors the real ~/.claude/projects/<project>/<session>.jsonl format:
+    records are linked via uuid/parentUuid, prompt text lives in the human
+    ``user`` record's ``message.content`` string, and response text lives in
+    the ``assistant`` record's ``message.content`` text blocks.
+    """
     projects_dir = temp_home / ".claude" / "projects" / "demo"
     projects_dir.mkdir(parents=True)
     session_id = "sess-001"
-    record = {
+    user_record = {
+        "type": "user",
+        "uuid": "u1",
+        "parentUuid": None,
+        "timestamp": "2026-07-08T09:59:58.000Z",
+        "cwd": "/home/user/demo",
+        "sessionId": session_id,
+        "message": {"role": "user", "content": "hello"},
+    }
+    assistant_record = {
         "type": "assistant",
+        "uuid": "a1",
+        "parentUuid": "u1",
         "timestamp": "2026-07-08T10:00:00.000Z",
         "cwd": "/home/user/demo",
         "sessionId": session_id,
-        "requestId": "req-001",
         "message": {
             "model": "claude-sonnet-4-5-20260701",
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "let me think"},
+                {"type": "text", "text": "world"},
+            ],
             "usage": {
                 "input_tokens": 100,
                 "output_tokens": 50,
@@ -42,31 +63,6 @@ def sample_project_jsonl(temp_home: Path) -> Path:
         },
     }
     path = projects_dir / f"{session_id}.jsonl"
-    path.write_text(json.dumps(record) + "\n", encoding="utf-8")
-    return path
-
-
-@pytest.fixture
-def sample_transcript_jsonl(temp_home: Path, sample_project_jsonl: Path) -> Path:
-    """Create a matching transcript file for the session."""
-    session_id = "sess-001"
-    transcripts_dir = temp_home / ".claude" / "transcripts"
-    transcripts_dir.mkdir(parents=True)
-    user_record = {
-        "type": "user",
-        "timestamp": "2026-07-08T09:59:58.000Z",
-        "sessionId": session_id,
-        "requestId": "req-001",
-        "message": {"content": "hello"},
-    }
-    assistant_record = {
-        "type": "assistant",
-        "timestamp": "2026-07-08T10:00:00.000Z",
-        "sessionId": session_id,
-        "requestId": "req-001",
-        "message": {"content": "world"},
-    }
-    path = transcripts_dir / f"{session_id}.jsonl"
     path.write_text(
         json.dumps(user_record) + "\n" + json.dumps(assistant_record) + "\n",
         encoding="utf-8",
