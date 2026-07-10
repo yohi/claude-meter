@@ -4,6 +4,7 @@ from pathlib import Path
 
 import subprocess
 import sys
+import threading
 
 import click
 
@@ -76,11 +77,30 @@ def config() -> None:
 @main.command()
 @click.option("--port", default=None, type=int, help="Streamlit port.")
 @click.option("--host", default=None, help="Streamlit host.")
-def ui(port: int | None, host: str | None) -> None:
+@click.option(
+    "--watch",
+    "watch_logs",
+    is_flag=True,
+    help="Also watch for new ClaudeCode logs in the background while the UI runs.",
+)
+@click.option(
+    "--poll",
+    default=5.0,
+    show_default=True,
+    type=float,
+    help="Polling interval in seconds for --watch (watchdog fallback).",
+)
+def ui(port: int | None, host: str | None, watch_logs: bool, poll: float) -> None:
     """Launch the Streamlit UI."""
     config = _config_and_db()
     ui_port = port if port is not None else config.ui.port
     ui_host = host or config.ui.host
+    if watch_logs:
+        watcher_thread: threading.Thread = threading.Thread(
+            target=watch, args=(config,), kwargs={"poll_interval": poll}, daemon=True
+        )
+        watcher_thread.start()
+        click.echo(f"Watching ClaudeCode logs in background (poll={poll}s)...")
     try:
         subprocess.run(
             [

@@ -60,6 +60,7 @@ Records without a `uuid` are assigned a deterministic synthetic ID so the
 | `claude-meter collect --reparse` | Re-ingest all JSONL files from start |
 | `claude-meter watch` | Watch configured data dir (`watchdog` or polling) |
 | `claude-meter ui` | Launch the Streamlit UI |
+| `claude-meter ui --watch [--poll N]` | Watch logs while UI runs |
 | `claude-meter pricing update [--force]` | Refresh Bedrock pricing cache |
 | `claude-meter config` | Show the config file path |
 

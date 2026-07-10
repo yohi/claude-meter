@@ -118,3 +118,75 @@ def test_watch_command_with_poll_interval(temp_home: Path, monkeypatch: pytest.M
     assert "watch_call" in captured
     _, poll_val = captured["watch_call"]
     assert poll_val == 2.5
+
+
+def test_ui_with_watch_flag(temp_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test `claude-meter ui --watch` starts watcher thread before streamlit."""
+    captured: dict[str, tuple] = {}
+
+    def fake_watch(config, poll_interval=5.0):
+        captured["watch_call"] = (config, poll_interval)
+
+    def fake_run(cmd, check=True):
+        captured["run_called"] = True
+
+        class _Result:
+            returncode = 0
+
+        return _Result()
+
+    monkeypatch.setattr("claude_meter.cli.watch", fake_watch)
+    monkeypatch.setattr("claude_meter.cli.subprocess.run", fake_run)
+    runner = CliRunner()
+    result = runner.invoke(main, ["ui", "--watch"])
+    assert result.exit_code == 0
+    assert "Watching ClaudeCode logs in background (poll=5.0s)..." in result.output
+    assert "watch_call" in captured
+    _, poll_val = captured["watch_call"]
+    assert poll_val == 5.0
+    assert "run_called" in captured
+
+
+def test_ui_with_watch_and_custom_poll(temp_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test `claude-meter ui --watch --poll N` passes custom poll interval to watcher."""
+    captured: dict[str, tuple] = {}
+
+    def fake_watch(config, poll_interval=5.0):
+        captured["watch_call"] = (config, poll_interval)
+
+    def fake_run(cmd, check=True):
+        class _Result:
+            returncode = 0
+
+        return _Result()
+
+    monkeypatch.setattr("claude_meter.cli.watch", fake_watch)
+    monkeypatch.setattr("claude_meter.cli.subprocess.run", fake_run)
+    runner = CliRunner()
+    result = runner.invoke(main, ["ui", "--watch", "--poll", "3.5"])
+    assert result.exit_code == 0
+    assert "Watching ClaudeCode logs in background (poll=3.5s)..." in result.output
+    assert "watch_call" in captured
+    _, poll_val = captured["watch_call"]
+    assert poll_val == 3.5
+
+
+def test_ui_without_watch_flag(temp_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test `claude-meter ui` without --watch does not call watch()."""
+    captured: dict[str, bool] = {}
+
+    def fake_watch(config, poll_interval=5.0):
+        captured["watch_called"] = True
+
+    def fake_run(cmd, check=True):
+        class _Result:
+            returncode = 0
+
+        return _Result()
+
+    monkeypatch.setattr("claude_meter.cli.watch", fake_watch)
+    monkeypatch.setattr("claude_meter.cli.subprocess.run", fake_run)
+    runner = CliRunner()
+    result = runner.invoke(main, ["ui"])
+    assert result.exit_code == 0
+    assert "watch_called" not in captured
