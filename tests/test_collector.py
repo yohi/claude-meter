@@ -568,3 +568,25 @@ def test_parse_incremental_reprocessed_existing_row_not_counted_as_insert(
         conn.commit()
 
     assert parse_incremental(config) == 0
+
+
+def test_is_human_user_empty_content_list_is_not_human() -> None:
+    """content が空リスト [] の user レコードは人間発話として誤判定されず False を返すこと。
+
+    空 content では types も [] となり tool_result 判定に到達しないため、以前は誤って True を
+    返していた。その回帰を直接検証する。"""
+    from claude_meter.collector import _is_human_user
+
+    empty_list = {"type": "user", "message": {"role": "user", "content": []}}
+    assert _is_human_user(empty_list) is False
+
+    # 回帰防止: tool_result のみの配列は従来どおり False。
+    tool_result_block = {"type": "tool_result", "tool_use_id": "t1", "content": "ok"}
+    tool_only = {"type": "user", "message": {"content": [tool_result_block]}}
+    assert _is_human_user(tool_only) is False
+
+    # 回帰防止: テキストブロック配列・素の文字列は人間発話として True。
+    text_block = {"type": "user", "message": {"content": [{"type": "text", "text": "hi"}]}}
+    assert _is_human_user(text_block) is True
+    plain_string = {"type": "user", "message": {"content": "hi"}}
+    assert _is_human_user(plain_string) is True

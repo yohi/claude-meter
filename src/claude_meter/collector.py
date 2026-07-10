@@ -134,7 +134,9 @@ def _is_human_user(record: dict[str, Any]) -> bool:
         return True
     if isinstance(content, list):
         types = [block.get("type") for block in content if isinstance(block, dict)]
-        if types and all(t == "tool_result" for t in types):
+        if not types:
+            return False
+        if all(t == "tool_result" for t in types):
             return False
         return True
     return False
@@ -193,23 +195,21 @@ class _FileSyncState:
     start_line: int
     last_size: int | None
     pending_prompt_text: str | None
-    pending_prompt_ts: datetime | None
     last_input_ts: datetime | None
 
 
 def _read_sync_state(conn: sqlite3.Connection, file_path: Path) -> _FileSyncState:
     row = conn.execute(
-        """SELECT last_size, last_line, pending_prompt_text, pending_prompt_ts, last_input_ts
+        """SELECT last_size, last_line, pending_prompt_text, last_input_ts
            FROM sync_state WHERE file_path = ?""",
         (str(file_path),),
     ).fetchone()
     if row is None:
-        return _FileSyncState(0, None, None, None, None)
+        return _FileSyncState(0, None, None, None)
     return _FileSyncState(
         start_line=int(row["last_line"] or 0),
         last_size=row["last_size"],
         pending_prompt_text=row["pending_prompt_text"],
-        pending_prompt_ts=_try_parse_ts(row["pending_prompt_ts"]),
         last_input_ts=_try_parse_ts(row["last_input_ts"]),
     )
 
@@ -220,21 +220,19 @@ def _update_sync_state(
     size: int,
     line_no: int,
     pending_prompt_text: str | None,
-    pending_prompt_ts: datetime | None,
     last_input_ts: datetime | None,
 ) -> None:
     conn.execute(
         """INSERT INTO sync_state (
                file_path, last_size, last_line, last_modified,
-               pending_prompt_text, pending_prompt_ts, last_input_ts
+               pending_prompt_text, last_input_ts
            )
-           VALUES (?, ?, ?, ?, ?, ?, ?)
+           VALUES (?, ?, ?, ?, ?, ?)
            ON CONFLICT(file_path) DO UPDATE SET
                last_size=excluded.last_size,
                last_line=excluded.last_line,
                last_modified=excluded.last_modified,
                pending_prompt_text=excluded.pending_prompt_text,
-               pending_prompt_ts=excluded.pending_prompt_ts,
                last_input_ts=excluded.last_input_ts""",
         (
             str(file_path),
@@ -242,7 +240,6 @@ def _update_sync_state(
             line_no,
             datetime.now(timezone.utc).isoformat(),
             pending_prompt_text,
-            pending_prompt_ts.isoformat() if pending_prompt_ts is not None else None,
             last_input_ts.isoformat() if last_input_ts is not None else None,
         ),
     )
@@ -271,13 +268,11 @@ def parse_incremental(config: Config, *, reparse: bool = False) -> int:
             state = _read_sync_state(conn, file_path)
             start_line = state.start_line
             pending_prompt_text = state.pending_prompt_text
-            pending_prompt_ts = state.pending_prompt_ts
             last_input_ts = state.last_input_ts
             if state.last_size is not None and current_size < state.last_size:
                 # File shrank (truncated/rotated): restart and drop stale context.
                 start_line = 0
                 pending_prompt_text = None
-                pending_prompt_ts = None
                 last_input_ts = None
             try:
                 fh = file_path.open("r", encoding="utf-8", errors="replace")
@@ -309,7 +304,6 @@ def parse_incremental(config: Config, *, reparse: bool = False) -> int:
                         if timestamp is not None:
                             last_input_ts = timestamp
                         if _is_human_user(record):
-                            pending_prompt_ts = timestamp
                             if store_prompts:
                                 pending_prompt_text = _human_user_text(record)[:max_prompt]
                             else:
@@ -375,11 +369,9 @@ def parse_incremental(config: Config, *, reparse: bool = False) -> int:
                 current_size,
                 line_no,
                 pending_prompt_text,
-                pending_prompt_ts,
                 last_input_ts,
             )
             conn.commit()
-        conn.commit()
     return inserted
 
 

@@ -1,6 +1,7 @@
 import sqlite3
 from pathlib import Path
 
+import pytest
 
 from claude_meter.db import get_connection, init_db, migrate_sync_state
 
@@ -26,7 +27,7 @@ def test_init_db_is_idempotent(tmp_path: Path) -> None:
     conn.close()
 
 
-_NEW_SYNC_STATE_COLUMNS = {"pending_prompt_text", "pending_prompt_ts", "last_input_ts"}
+_NEW_SYNC_STATE_COLUMNS = {"pending_prompt_text", "last_input_ts"}
 
 
 def _sync_state_columns(conn: sqlite3.Connection) -> set[str]:
@@ -84,5 +85,28 @@ def test_migrate_sync_state_adds_columns_idempotently(tmp_path: Path) -> None:
         assert row["last_line"] == 1
         assert row["pending_prompt_text"] is None
         assert row["last_input_ts"] is None
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(
+    sqlite3.sqlite_version_info < (3, 35, 0),
+    reason="ALTER TABLE ... DROP COLUMN requires SQLite 3.35.0+",
+)
+def test_migrate_sync_state_drops_legacy_pending_prompt_ts(tmp_path: Path) -> None:
+    """A DB that still carries the obsolete pending_prompt_ts column (added by an
+    earlier release) has it dropped by migrate_sync_state()."""
+    db_path = tmp_path / "legacy_ts.db"
+    init_db(db_path)
+    conn = get_connection(db_path)
+    try:
+        conn.execute("ALTER TABLE sync_state ADD COLUMN pending_prompt_ts DATETIME")
+        conn.commit()
+        assert "pending_prompt_ts" in _sync_state_columns(conn)
+
+        migrate_sync_state(conn)
+        assert "pending_prompt_ts" not in _sync_state_columns(conn)
+        # The live context columns are untouched by the drop.
+        assert _NEW_SYNC_STATE_COLUMNS <= _sync_state_columns(conn)
     finally:
         conn.close()

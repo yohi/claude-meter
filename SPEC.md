@@ -95,10 +95,10 @@ display names; missing or malformed history data never blocks collection.
 - File shrinkage (rotation/truncation) resets the parse position to zero.
 - JSONL lines with `UnicodeDecodeError` are handled with `errors="replace"` for
   partial-fault tolerance.
-- Batch-boundary context (the most recent human-utterance prompt text and its
-  timestamp) is carried over in `sync_state` so that an `assistant` record
-  whose parent `user` record was ingested in an earlier batch can still resolve
-  its prompt text.
+- Batch-boundary context (the most recent human-utterance prompt text and the
+  timestamp of the most recent input record) is carried over in `sync_state` so
+  that a later batch can resolve `prompt_text`/`response_time_ms` for an
+  `assistant` record whose parent `user` record was ingested in an earlier batch.
 
 ### Response time calculation
 
@@ -177,12 +177,11 @@ CREATE TABLE sync_state (
     last_line INTEGER,
     last_modified DATETIME,
     -- Batch-boundary carry-over context (see collector.parse_incremental):
-    -- the most recent human-utterance prompt text (already truncated) and its
-    -- timestamp, plus the timestamp of the most recent input record, so a later
-    -- batch can resolve prompt_text/response_time_ms for an assistant whose
-    -- parent user record was ingested in an earlier batch.
+    -- the most recent human-utterance prompt text (already truncated), plus the
+    -- timestamp of the most recent input record, so a later batch can resolve
+    -- prompt_text/response_time_ms for an assistant whose parent user record was
+    -- ingested in an earlier batch.
     pending_prompt_text TEXT,
-    pending_prompt_ts DATETIME,
     last_input_ts DATETIME
 );
 ```
