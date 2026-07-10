@@ -62,6 +62,7 @@ def calculate_cost(
                 normalized,
             )
         return None
+
     def _component(tokens: int, price_per_1k: float | None) -> float | None:
         # 使用トークンが 0 のコンポーネントは価格未知でも影響しないので 0 を返す。
         # トークンがあるのに価格が None の場合は、0円として過小計上しないよう None を返す。
@@ -76,9 +77,7 @@ def calculate_cost(
     cache_creation_cost = _component(
         record.cache_creation_input_tokens, price.cache_creation_price_per_1k
     )
-    cache_read_cost = _component(
-        record.cache_read_input_tokens, price.cache_read_price_per_1k
-    )
+    cache_read_cost = _component(record.cache_read_input_tokens, price.cache_read_price_per_1k)
     if (
         input_cost is None
         or output_cost is None

@@ -9,9 +9,7 @@ import streamlit as st
 
 from claude_meter.config import load_config
 from claude_meter.db import get_connection
-from claude_meter.model_normalizer import normalize_model_name
-
-_UNKNOWN_MODEL = "Unknown model"
+from claude_meter.model_normalizer import display_model_name
 
 
 def _model_summary(conn: sqlite3.Connection) -> pd.DataFrame:
@@ -41,10 +39,7 @@ def render() -> None:
     with closing(get_connection(config.storage.db_path)) as conn:
         summary = _model_summary(conn)
         if not summary.empty:
-            unknown = summary["model"].apply(
-                lambda m: not str(m).strip() or normalize_model_name(str(m)) is None
-            )
-            summary.loc[unknown, "model"] = _UNKNOWN_MODEL
+            summary["model"] = summary["model"].apply(lambda model: display_model_name(str(model)))
             summary = (
                 summary.groupby("model", as_index=False)
                 .agg(

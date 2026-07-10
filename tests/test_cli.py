@@ -14,7 +14,9 @@ def test_init_creates_db(temp_home: Path) -> None:
     result = runner.invoke(main, ["init"])
     assert result.exit_code == 0
     db_path = temp_home / ".claude-meter" / "data.db"
+    config_path = temp_home / ".claude-meter" / "config.yaml"
     assert db_path.exists()
+    assert config_path.exists()
 
 
 def test_config_shows_path(temp_home: Path) -> None:
@@ -24,7 +26,9 @@ def test_config_shows_path(temp_home: Path) -> None:
     assert ".claude-meter/config.yaml" in result.output
 
 
-def test_pricing_update_force_monkeypatched(temp_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pricing_update_force_monkeypatched(
+    temp_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     def fake_update(config, force=False):
         return [
             PricingRecord(model="m1", region="us-east-1"),

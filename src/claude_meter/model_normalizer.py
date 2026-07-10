@@ -57,6 +57,13 @@ def normalize_model_name(raw_model: str) -> str | None:
     return None
 
 
+def display_model_name(model: str) -> str:
+    normalized = normalize_model_name(model)
+    if normalized is None:
+        return "Unknown model"
+    return normalized
+
+
 def model_to_arn_keys(normalized: str) -> list[str]:
     """Return the Bedrock ARN-style price keys for a normalized model name."""
     return _NORMALIZED_TO_ARNS.get(normalized, [normalized])

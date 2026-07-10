@@ -125,9 +125,7 @@ def _parse_transcript_file(
             raw_content = record.get("message", {}).get("content", "")
             if isinstance(raw_content, list):
                 content = "".join(
-                    block.get("text", "")
-                    for block in raw_content
-                    if isinstance(block, dict)
+                    block.get("text", "") for block in raw_content if isinstance(block, dict)
                 )
             elif isinstance(raw_content, str):
                 content = raw_content
@@ -182,6 +180,42 @@ def _compute_response_time(
     delta = assistant_ts - user_ts
     return max(0, int(delta.total_seconds() * 1000))
 
+
+def _backfill_transcript_data(
+    conn: sqlite3.Connection,
+    config: Config,
+    transcripts: dict[tuple[str, str | None], tuple[str, str, datetime]],
+) -> None:
+    for (session_id, request_id), pair in transcripts.items():
+        if request_id is None:
+            continue
+        row = conn.execute(
+            "SELECT timestamp, prompt_text FROM requests WHERE session_id = ? AND request_id = ?",
+            (session_id, request_id),
+        ).fetchone()
+
+        if row is None:
+            continue
+
+        if row["prompt_text"] is not None:
+            continue
+        response_time_ms = _compute_response_time(
+            session_id, request_id, _parse_iso_ts(row["timestamp"]), transcripts
+        )
+        conn.execute(
+            """UPDATE requests
+               SET prompt_text = ?, response_text = ?, response_time_ms = ?
+               WHERE session_id = ? AND request_id = ?""",
+            (
+                pair[0][: config.privacy.max_prompt_length],
+                pair[1][: config.privacy.max_response_length],
+                response_time_ms,
+                session_id,
+                request_id,
+            ),
+        )
+
+
 def parse_incremental(config: Config) -> int:
     files = collect_files(config)
     history_hints = load_history_project_hints(config)
@@ -191,6 +225,8 @@ def parse_incremental(config: Config) -> int:
     transcripts = _load_transcripts(config) if config.privacy.store_prompts else {}
     inserted = 0
     with get_connection(config.storage.db_path) as conn:
+        if config.privacy.store_prompts:
+            _backfill_transcript_data(conn, config, transcripts)
         for file_path in files:
             try:
                 current_size = file_path.stat().st_size
@@ -246,9 +282,11 @@ def parse_incremental(config: Config) -> int:
                         project=project,
                         git_repository=repo,
                         model=model,
+                        region=config.claude.region,
                         input_tokens=usage.get("input_tokens", 0) or 0,
                         output_tokens=usage.get("output_tokens", 0) or 0,
-                        cache_creation_input_tokens=usage.get("cache_creation_input_tokens", 0) or 0,
+                        cache_creation_input_tokens=usage.get("cache_creation_input_tokens", 0)
+                        or 0,
                         cache_read_input_tokens=usage.get("cache_read_input_tokens", 0) or 0,
                         source_file=file_path,
                     )
@@ -267,15 +305,19 @@ def parse_incremental(config: Config) -> int:
                         if config.privacy.store_prompts:
                             rec.prompt_text = pair[0][: config.privacy.max_prompt_length]
                             rec.response_text = pair[1][: config.privacy.max_response_length]
-                    _insert_usage(conn, rec)
-                    inserted += 1
+                    if _insert_usage(conn, rec):
+                        inserted += 1
             _update_sync_state(conn, file_path, current_size, line_no)
             conn.commit()
         conn.commit()
     return inserted
 
 
-def _insert_usage(conn: sqlite3.Connection, rec: UsageRecord) -> None:
+def _insert_usage(conn: sqlite3.Connection, rec: UsageRecord) -> bool:
+    existing = conn.execute(
+        "SELECT 1 FROM requests WHERE session_id = ? AND request_id = ?",
+        (rec.session_id, rec.request_id),
+    ).fetchone()
     conn.execute(
         """INSERT INTO requests (
             timestamp, session_id, request_id, project, git_repository,
@@ -317,3 +359,4 @@ def _insert_usage(conn: sqlite3.Connection, rec: UsageRecord) -> None:
             str(rec.source_file),
         ),
     )
+    return existing is None

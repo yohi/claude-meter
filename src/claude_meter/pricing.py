@@ -14,7 +14,7 @@ from typing import Any
 import requests
 import yaml
 
-from claude_meter.config import Config
+from claude_meter.config import Config, resolve_config_path
 from claude_meter.db import get_connection
 from claude_meter.models import PricingRecord
 
@@ -40,12 +40,16 @@ _MODELS_DEV_REGION_BY_PREFIX = {
 }
 
 
-def _cache_path(config: Config) -> Path:
-    return Path(config.storage.db_path).parent / "pricing.json"
+def _cache_path() -> Path:
+    return resolve_config_path().parent / "pricing.json"
 
 
-def _cache_meta_path(config: Config) -> Path:
-    return Path(config.storage.db_path).parent / "pricing-meta.yaml"
+def _cache_meta_path() -> Path:
+    return resolve_config_path().parent / "pricing-meta.yaml"
+
+
+def _override_path() -> Path:
+    return resolve_config_path().parent / "pricing-overrides.json"
 
 
 def _per_1k(value: Any) -> float | None:
@@ -58,7 +62,7 @@ def _per_1k(value: Any) -> float | None:
         return None
 
 
-def load_fallback_pricing() -> list[PricingRecord]:
+def load_fallback_pricing(config: Config | None = None) -> list[PricingRecord]:
     path = Path(__file__).with_name("pricing_fallback.json")
     data = json.loads(path.read_text(encoding="utf-8"))
     records: list[PricingRecord] = []
@@ -78,19 +82,21 @@ def load_fallback_pricing() -> list[PricingRecord]:
                         updated_at=now,
                     )
                 )
-    return records
+    if config is None:
+        return records
+    return _merge_pricing_records(records, load_pricing_overrides(config))
 
 
-def _load_cached_pricing(config: Config) -> list[PricingRecord] | None:
-    cache = _cache_path(config)
-    meta = _cache_meta_path(config)
+def _load_cached_pricing(config: Config, allow_stale: bool = False) -> list[PricingRecord] | None:
+    cache = _cache_path()
+    meta = _cache_meta_path()
     if not cache.exists() or not meta.exists():
         return None
     try:
         meta_data = yaml.safe_load(meta.read_text(encoding="utf-8"))
         updated = datetime.fromisoformat(meta_data["updated_at"])
         ttl = timedelta(hours=config.pricing.cache_ttl_hours)
-        if datetime.now(timezone.utc) - updated > ttl:
+        if not allow_stale and datetime.now(timezone.utc) - updated > ttl:
             return None
         data = json.loads(cache.read_text(encoding="utf-8"))
         return [PricingRecord.model_validate(r) for r in data]
@@ -99,9 +105,56 @@ def _load_cached_pricing(config: Config) -> list[PricingRecord] | None:
         return None
 
 
+def load_pricing_overrides(config: Config) -> list[PricingRecord]:
+    path = _override_path()
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return [PricingRecord.model_validate(record) for record in data]
+    except (OSError, TypeError, ValueError) as exc:
+        logger.warning("Failed to load pricing overrides from %s: %s", path, exc)
+        return []
+
+
+def save_pricing_overrides(config: Config, records: list[PricingRecord]) -> None:
+    path = _override_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # 直接上書きすると書き込み中断時にファイルが破損するため、tempfile + os.replace
+    # でアトミックに差し替える。_save_cached_pricing と同じ方式。
+    tmp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f"{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as f:
+            tmp_path = Path(f.name)
+            f.write(json.dumps([record.model_dump(mode="json") for record in records], indent=2))
+        os.replace(tmp_path, path)
+    finally:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
+
+
+def _merge_pricing_records(
+    records: list[PricingRecord], overrides: list[PricingRecord]
+) -> list[PricingRecord]:
+    by_key = {(record.model, record.region): record for record in records}
+    by_key.update({(record.model, record.region): record for record in overrides})
+    return list(by_key.values())
+
+
+def _apply_pricing_overrides(config: Config, records: list[PricingRecord]) -> list[PricingRecord]:
+    return _merge_pricing_records(records, load_pricing_overrides(config))
+
+
 def _save_cached_pricing(config: Config, records: list[PricingRecord]) -> None:
-    cache = _cache_path(config)
-    meta = _cache_meta_path(config)
+    cache = _cache_path()
+    meta = _cache_meta_path()
     cache.parent.mkdir(parents=True, exist_ok=True)
     # tmpファイルに書いてから os.replace でアトミックに差し替える。中途のクラッシュにより
     # 半端なJSON/YAMLが残らないようにする。並行実行(CLI/UI/watcherの同時起動)で固定名の
@@ -310,8 +363,14 @@ def update_pricing(config: Config, force: bool = False) -> list[PricingRecord]:
     if not force:
         cached = _load_cached_pricing(config)
         if cached is not None:
-            upsert_pricing_table(config, cached)
-            return cached
+            if _has_arn_style_keys(cached):
+                effective_records = _apply_pricing_overrides(config, cached)
+                upsert_pricing_table(config, effective_records)
+                return effective_records
+            logger.warning(
+                "Ignoring cached pricing because it contains no ARN-style Bedrock model keys"
+            )
+    stale_cache = _load_cached_pricing(config, allow_stale=True)
     # Fetcher order follows config: primary_source then fallback_source. Unknown
     # source names are logged and skipped; a source's records are only accepted
     # when they contain ARN-style keys that calculate_cost() can actually look up
@@ -325,9 +384,20 @@ def update_pricing(config: Config, force: bool = False) -> list[PricingRecord]:
         records = fetcher()
         if records and _has_arn_style_keys(records):
             _save_cached_pricing(config, records)
-            upsert_pricing_table(config, records)
-            return records
-    fallback = load_fallback_pricing()
+            effective_records = _apply_pricing_overrides(config, records)
+            upsert_pricing_table(config, effective_records)
+            return effective_records
+    if stale_cache is not None and _has_arn_style_keys(stale_cache):
+        logger.warning("Using stale cached pricing because all configured sources failed")
+        effective_records = _apply_pricing_overrides(config, stale_cache)
+        upsert_pricing_table(config, effective_records)
+        return effective_records
+    fallback = load_fallback_pricing(config)
+
     _save_cached_pricing(config, fallback)
-    upsert_pricing_table(config, fallback)
-    return fallback
+
+    effective_records = _apply_pricing_overrides(config, fallback)
+
+    upsert_pricing_table(config, effective_records)
+
+    return effective_records

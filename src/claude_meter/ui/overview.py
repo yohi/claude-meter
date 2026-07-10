@@ -11,6 +11,7 @@ import streamlit as st
 
 from claude_meter.db import get_connection
 from claude_meter.config import load_config
+from claude_meter.model_normalizer import display_model_name
 
 
 def _summary_for_period(conn: sqlite3.Connection, start: str, end: str) -> dict[str, Any]:
@@ -97,7 +98,9 @@ _TOP_COSTLY_PROMPTS_WITH_TEXT = """SELECT timestamp, project, model, cost_usd, p
            LIMIT ?"""
 
 
-def _top_costly_prompts(conn: sqlite3.Connection, start: str, end: str, show_prompts: bool, limit: int = 10) -> pd.DataFrame:
+def _top_costly_prompts(
+    conn: sqlite3.Connection, start: str, end: str, show_prompts: bool, limit: int = 10
+) -> pd.DataFrame:
     column_names = ["timestamp", "project", "model", "cost_usd"]
     if show_prompts:
         column_names.append("prompt_text")
@@ -156,6 +159,8 @@ def render() -> None:
 
         models = _model_tokens(conn, start, end)
         if not models.empty:
+            models["model"] = models["model"].apply(lambda model: display_model_name(str(model)))
+            models = models.groupby("model", as_index=False).agg(tokens=("tokens", "sum"))
             st.altair_chart(
                 alt.Chart(models)
                 .mark_arc()

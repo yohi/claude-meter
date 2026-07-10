@@ -8,6 +8,7 @@ import streamlit as st
 
 from claude_meter.config import load_config
 from claude_meter.db import get_connection
+from claude_meter.model_normalizer import display_model_name
 
 
 def _list_sessions(conn: sqlite3.Connection) -> pd.DataFrame:
@@ -41,11 +42,19 @@ _SESSION_REQUESTS_WITH_TEXT = """SELECT timestamp, request_id, project, model,
            ORDER BY timestamp"""
 
 
-def _session_requests(conn: sqlite3.Connection, session_id: str, show_prompts: bool) -> pd.DataFrame:
+def _session_requests(
+    conn: sqlite3.Connection, session_id: str, show_prompts: bool
+) -> pd.DataFrame:
     col_names = [
-        "timestamp", "request_id", "project", "model",
-        "input_tokens", "output_tokens",
-        "cache_creation_input_tokens", "cache_read_input_tokens", "cost_usd",
+        "timestamp",
+        "request_id",
+        "project",
+        "model",
+        "input_tokens",
+        "output_tokens",
+        "cache_creation_input_tokens",
+        "cache_read_input_tokens",
+        "cost_usd",
     ]
     if show_prompts:
         col_names += ["prompt_text", "response_text"]
@@ -68,12 +77,16 @@ def render() -> None:
             selected = st.selectbox("Session", sessions["session_id"].tolist())
             if selected:
                 requests_df = _session_requests(conn, selected, config.privacy.show_prompts_in_ui)
+                requests_df["model"] = requests_df["model"].apply(
+                    lambda model: display_model_name(str(model))
+                )
                 st.dataframe(requests_df, use_container_width=True)
                 if config.privacy.show_prompts_in_ui:
                     search = st.text_input("Search prompts/responses")
                     if search:
-                        mask = (
-                            requests_df["prompt_text"].str.contains(search, na=False, case=False, regex=False)
-                            | requests_df["response_text"].str.contains(search, na=False, case=False, regex=False)
+                        mask = requests_df["prompt_text"].str.contains(
+                            search, na=False, case=False, regex=False
+                        ) | requests_df["response_text"].str.contains(
+                            search, na=False, case=False, regex=False
                         )
                         st.dataframe(requests_df[mask], use_container_width=True)

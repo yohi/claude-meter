@@ -8,7 +8,7 @@ import sys
 import click
 
 from claude_meter.collector import parse_incremental
-from claude_meter.config import Config, load_config, resolve_config_path
+from claude_meter.config import Config, load_config, resolve_config_path, save_config
 from claude_meter.cost import fill_missing_costs
 from claude_meter.db import init_db
 from claude_meter.pricing import update_pricing
@@ -32,6 +32,9 @@ def main() -> None:
 def init() -> None:
     """Create config file and SQLite database."""
     config = _config_and_db()
+    config_path = resolve_config_path()
+    if not config_path.exists():
+        save_config(config, config_path)
     click.echo(f"Initialized: {config.storage.db_path}")
 
 
@@ -99,7 +102,9 @@ def ui(port: int | None, host: str | None) -> None:
 
 
 @main.command(name="watch")
-@click.option("--poll", default=5.0, help="Polling interval in seconds (fallback when watchdog unavailable).")
+@click.option(
+    "--poll", default=5.0, help="Polling interval in seconds (fallback when watchdog unavailable)."
+)
 def watch_cmd(poll: float) -> None:
     """Watch ~/.claude for new JSONL data."""
     config = _config_and_db()

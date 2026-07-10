@@ -1,6 +1,8 @@
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+import yaml
 
 from claude_meter.config import Config
 from claude_meter.models import PricingRecord
@@ -32,13 +34,136 @@ def test_update_pricing_uses_cache_when_fresh(temp_home: Path) -> None:
 
     config = Config()
     init_db(config.storage.db_path)
-    records = [PricingRecord(model="m", region="us-east-1", input_price_per_1k=1.0)]
+    records = [
+        PricingRecord(
+            model="anthropic.claude-3-haiku-20240307-v1:0",
+            region="us-east-1",
+            input_price_per_1k=1.0,
+        )
+    ]
     from claude_meter.pricing import _save_cached_pricing
 
     _save_cached_pricing(config, records)
     result = update_pricing(config)
     assert len(result) == 1
-    assert result[0].input_price_per_1k == 1.0
+    assert result[0].input_price_per_1k == pytest.approx(1.0)
+
+
+def test_update_pricing_applies_overrides_to_fresh_cache(temp_home: Path) -> None:
+    from contextlib import closing
+
+    from claude_meter.db import get_connection, init_db
+    from claude_meter.pricing import _save_cached_pricing, save_pricing_overrides
+
+    config = Config()
+    init_db(config.storage.db_path)
+    model = "anthropic.claude-3-haiku-20240307-v1:0"
+    _save_cached_pricing(
+        config,
+        [PricingRecord(model=model, region="us-east-1", input_price_per_1k=1.0)],
+    )
+    save_pricing_overrides(
+        config,
+        [
+            PricingRecord(
+                model=model,
+                region="us-east-1",
+                input_price_per_1k=2.0,
+                source="local_override",
+            )
+        ],
+    )
+
+    result = update_pricing(config)
+
+    assert result[0].input_price_per_1k == pytest.approx(2.0)
+    with closing(get_connection(config.storage.db_path)) as conn:
+        row = conn.execute(
+            "SELECT input_price_per_1k, source FROM pricing WHERE model = ? AND region = ?",
+            (model, "us-east-1"),
+        ).fetchone()
+    assert row is not None
+    assert row["input_price_per_1k"] == pytest.approx(2.0)
+    assert row["source"] == "local_override"
+
+
+def test_update_pricing_ignores_cached_records_without_arn_style_keys(
+    temp_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from claude_meter import pricing
+    from claude_meter.db import init_db
+    from claude_meter.pricing import _save_cached_pricing
+
+    config = Config()
+    init_db(config.storage.db_path)
+    _save_cached_pricing(
+        config,
+        [PricingRecord(model="Claude 2.1", region="us-east-1", input_price_per_1k=1.0)],
+    )
+    usable = [
+        PricingRecord(
+            model="anthropic.claude-3-haiku-20240307-v1:0",
+            region="us-east-1",
+            input_price_per_1k=2.0,
+        )
+    ]
+    monkeypatch.setattr(pricing, "fetch_models_dev", lambda: usable)
+    monkeypatch.setitem(pricing._FETCHERS_BY_SOURCE, "models_dev", lambda: usable)
+
+    result = pricing.update_pricing(config)
+    assert result == usable
+
+
+def test_update_pricing_uses_stale_cache_when_all_sources_fail(
+    temp_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from claude_meter import pricing
+    from claude_meter.db import init_db
+    from claude_meter.pricing import _cache_meta_path, _save_cached_pricing
+
+    config = Config()
+    init_db(config.storage.db_path)
+    cached = [
+        PricingRecord(
+            model="anthropic.claude-3-haiku-20240307-v1:0",
+            region="us-east-1",
+            input_price_per_1k=9.0,
+        )
+    ]
+    _save_cached_pricing(config, cached)
+    _cache_meta_path().write_text(
+        yaml.safe_dump(
+            {"updated_at": (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()}
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setitem(pricing._FETCHERS_BY_SOURCE, "models_dev", lambda: [])
+    monkeypatch.setitem(pricing._FETCHERS_BY_SOURCE, "aws_bedrock_json", lambda: [])
+
+    result = pricing.update_pricing(config)
+
+    assert result == cached
+
+
+def test_load_fallback_pricing_applies_local_overrides(temp_home: Path) -> None:
+    from claude_meter.pricing import save_pricing_overrides
+
+    config = Config()
+    override = PricingRecord(
+        model="anthropic.claude-sonnet-4-5-20260701-v1:0",
+        region="us-east-1",
+        input_price_per_1k=0.123,
+        output_price_per_1k=0.456,
+        cache_creation_price_per_1k=0.789,
+        cache_read_price_per_1k=0.012,
+        source="local_override",
+    )
+    save_pricing_overrides(config, [override])
+
+    records = load_fallback_pricing(config)
+
+    assert override in records
 
 
 def test_save_cached_pricing_leaves_no_leftover_tmp_files(temp_home: Path) -> None:
@@ -53,8 +178,8 @@ def test_save_cached_pricing_leaves_no_leftover_tmp_files(temp_home: Path) -> No
 
     _save_cached_pricing(config, records)
 
-    cache = _cache_path(config)
-    meta = _cache_meta_path(config)
+    cache = _cache_path()
+    meta = _cache_meta_path()
     assert cache.exists()
     assert meta.exists()
     # 一時ファイル(*.tmp)はクリーアコーンされて残らないこと。
@@ -163,7 +288,8 @@ def test_fetch_aws_bedrock_json_classifies_cache_before_input_output(
 
 
 def test_update_pricing_skips_source_without_arn_style_keys(
-    temp_home: Path, monkeypatch: pytest.MonkeyPatch,
+    temp_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A fetcher returning non-empty but non-ARN-style keys (e.g. human-readable
     AWS model names) must be rejected so update_pricing falls through to the
@@ -177,7 +303,13 @@ def test_update_pricing_skips_source_without_arn_style_keys(
     init_db(config.storage.db_path)
 
     unusable = [PricingRecord(model="Claude 2.1", region="us-east-1", input_price_per_1k=1.0)]
-    usable = [PricingRecord(model="anthropic.claude-3-haiku-20240307-v1:0", region="us-east-1", input_price_per_1k=2.0)]
+    usable = [
+        PricingRecord(
+            model="anthropic.claude-3-haiku-20240307-v1:0",
+            region="us-east-1",
+            input_price_per_1k=2.0,
+        )
+    ]
     monkeypatch.setattr(pricing, "fetch_aws_bedrock_json", lambda: unusable)
     monkeypatch.setattr(pricing, "fetch_models_dev", lambda: usable)
     monkeypatch.setitem(pricing._FETCHERS_BY_SOURCE, "aws_bedrock_json", lambda: unusable)
