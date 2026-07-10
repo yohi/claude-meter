@@ -21,7 +21,11 @@ dependencies = [
     "pyyaml>=6.0",
     "altair>=5.3",
     "plotly>=5.22",
-    "pandas>=2.2",
+    # pandas<3: pandas 3.x defaults string columns to a PyArrow-backed StringDtype,
+    # which triggers native SIGSEGV crashes in libarrow.so when Streamlit serializes
+    # certain DataFrames to Arrow (see streamlit/streamlit#14609, #14617). Pin below 3
+    # until the ecosystem (streamlit/pyarrow) stabilizes this interaction.
+    "pandas>=2.2,<3",
     "click>=8.1",
 ]
 
