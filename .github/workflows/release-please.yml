@@ -42,19 +42,25 @@ jobs:
         env:
           BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
           RELEASE_TAG: ${{ steps.release.outputs.tag_name }}
+          BITBUCKET_MIRROR_REPOSITORY_NAME: ${{ github.event.repository.name }}
         run: |
           set -euo pipefail
           : "${BITBUCKET_WORKSPACE_NAME:?BITBUCKET_WORKSPACE_NAME is required}"
+          : "${BITBUCKET_MIRROR_REPOSITORY_NAME:?BITBUCKET_MIRROR_REPOSITORY_NAME is required}"
           if [ -z "${BITBUCKET_API_TOKEN}" ]; then
             echo "BITBUCKET_API_TOKEN not set" >&2
             exit 1
           fi
 
-          MIRROR_REPO_URL="https://bitbucket.org/${BITBUCKET_WORKSPACE_NAME}/${{ github.event.repository.name }}.git"
-          AUTH_MIRROR_URL="https://x-token-auth:${BITBUCKET_API_TOKEN}@${MIRROR_REPO_URL#https://}"
+          ASKPASS_SCRIPT="$(mktemp)"
+          trap 'rm -f "$ASKPASS_SCRIPT"' EXIT
+          printf '#!/bin/sh\necho "$BITBUCKET_API_TOKEN"\n' > "$ASKPASS_SCRIPT"
+          chmod +x "$ASKPASS_SCRIPT"
+          export GIT_ASKPASS="$ASKPASS_SCRIPT"
 
-          # Push the release branch and the tag to Bitbucket mirror
-          git remote add bitbucket-mirror "${AUTH_MIRROR_URL}"
+          MIRROR_REPO_URL="https://x-token-auth@bitbucket.org/${BITBUCKET_WORKSPACE_NAME}/${BITBUCKET_MIRROR_REPOSITORY_NAME}.git"
+
+          git remote add bitbucket-mirror "${MIRROR_REPO_URL}"
           git push bitbucket-mirror HEAD:master
           git push bitbucket-mirror "refs/tags/${RELEASE_TAG}"
         if: ${{ steps.release.outputs.release_created }}
