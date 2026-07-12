@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import math
+import threading
 
 import pytest
 from click.testing import CliRunner
@@ -125,11 +126,14 @@ def test_watch_command_with_poll_interval(temp_home: Path, monkeypatch: pytest.M
 def test_ui_with_watch_flag(temp_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Test `claude-meter ui --watch` starts watcher thread before streamlit."""
     captured: dict[str, tuple] = {}
+    watch_started = threading.Event()
 
     def fake_watch(config, poll_interval=5.0):
         captured["watch_call"] = (config, poll_interval)
+        watch_started.set()
 
     def fake_run(cmd, check=True):
+        watch_started.wait(timeout=5)
         captured["run_called"] = True
 
         class _Result:
@@ -152,11 +156,15 @@ def test_ui_with_watch_flag(temp_home: Path, monkeypatch: pytest.MonkeyPatch) ->
 def test_ui_with_watch_and_custom_poll(temp_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Test `claude-meter ui --watch --poll N` passes custom poll interval to watcher."""
     captured: dict[str, tuple] = {}
+    watch_started = threading.Event()
 
     def fake_watch(config, poll_interval=5.0):
         captured["watch_call"] = (config, poll_interval)
+        watch_started.set()
 
     def fake_run(cmd, check=True):
+        watch_started.wait(timeout=5)
+
         class _Result:
             returncode = 0
 
@@ -181,6 +189,7 @@ def test_ui_without_watch_flag(temp_home: Path, monkeypatch: pytest.MonkeyPatch)
         captured["watch_called"] = True
 
     def fake_run(cmd, check=True):
+
         class _Result:
             returncode = 0
 
@@ -198,6 +207,7 @@ def test_start_first_launch_initializes_and_collects(
     temp_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """`start` on first launch saves config, collects logs, and launches Streamlit."""
+    watch_started = threading.Event()
     captured: dict[str, object] = {}
 
     def fake_parse_incremental(config, reparse=False):
@@ -210,8 +220,10 @@ def test_start_first_launch_initializes_and_collects(
 
     def fake_watch(config, poll_interval=5.0):
         captured["watch_call"] = (config, poll_interval)
+        watch_started.set()
 
     def fake_run(cmd, check=True):
+        watch_started.wait(timeout=5)
         captured["cmd"] = cmd
 
         class _Result:
@@ -241,6 +253,7 @@ def test_start_second_launch_skips_collect(
     temp_home: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """`start` with an existing config skips collection but still launches UI + watch."""
+    watch_started = threading.Event()
     captured: dict[str, object] = {}
 
     def fake_parse_incremental(config, reparse=False):
@@ -253,8 +266,10 @@ def test_start_second_launch_skips_collect(
 
     def fake_watch(config, poll_interval=5.0):
         captured["watch_call"] = (config, poll_interval)
+        watch_started.set()
 
     def fake_run(cmd, check=True):
+        watch_started.wait(timeout=5)
         captured["cmd"] = cmd
 
         class _Result:
