@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.1](https://github.com/yohi/claude-meter/compare/v0.2.0...v0.2.1) (2026-07-12)
+
+
+### Bug Fixes
+
+* **ci:** Bitbucketミラーのmasterが存在しない初回プッシュ時にfetchが失敗して停止する問題を修正 ([d98d0ef](https://github.com/yohi/claude-meter/commit/d98d0efb549649a35476b47fda0279a9aaa9ab87))
+* **ci:** Bitbucketミラーへのプッシュ時にデプロイコミットとの競合を避けるため事前にfetch & mergeを実行 ([76d89a7](https://github.com/yohi/claude-meter/commit/76d89a7b54ca5d10f29c19dffb29b209a9cd9dfe))
+* **ci:** Bitbucketミラーへのプッシュ時にデプロイコミットとの競合を避けるため事前にfetch & mergeを実行 ([ce6d6be](https://github.com/yohi/claude-meter/commit/ce6d6be5cadc80dac51ce5c72f9ba99aeae6b6bc))
+
 ## [0.2.0](https://github.com/yohi/claude-meter/compare/v0.1.0...v0.2.0) (2026-07-12)
 
 
