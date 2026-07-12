@@ -19,8 +19,15 @@ uv run claude-meter start   # または: uv run cm start
 uvx --from https://bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/<BITBUCKET_REPOSITORY_NAME>/raw/master/packages/claude-meter/claude-meter-<VERSION>.tar.gz claude-meter start
 
 # Gitリポジトリから直接実行する場合
-# (<BITBUCKET_WORKSPACE_NAME> をご自身のワークスペース名に置き換えてください)
+# ※プライベートリポジトリの場合は、SSH接続（git+ssh://）を使用するか、HTTPS URLに認証情報（Appパスワードなど）を含めてください。
+
+## SSH接続を使用する場合（推奨・要SSHキー設定）
+uvx --from git+ssh://git@bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/claude-meter.git claude-meter start
+
+## HTTPS接続を使用する場合
 uvx --from git+https://bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/claude-meter.git claude-meter start
+# プライベートリポジトリでHTTPSを使用する場合の例:
+# uvx --from git+https://<USERNAME>:<APP_PASSWORD>@bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/claude-meter.git claude-meter start
 ```
 
 ### `pip` を使用する場合
