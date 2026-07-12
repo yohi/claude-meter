@@ -12,6 +12,9 @@ permissions:
 jobs:
   release-please:
     runs-on: ubuntu-slim
+    env:
+      BITBUCKET_WORKSPACE_NAME: ${{ vars.BITBUCKET_WORKSPACE_NAME }}
+      BITBUCKET_REPOSITORY_NAME: ${{ vars.BITBUCKET_REPOSITORY_NAME }}
     steps:
       # 1. release-please-action でリリースPR / タグ作成を自動化
       - uses: googleapis/release-please-action@v4
@@ -37,10 +40,26 @@ jobs:
       # 3. Bitbucket リポジトリのクローン
       - name: Clone Bitbucket Repo
         env:
-          BITBUCKET_TOKEN: ${{ secrets.BITBUCKET_TOKEN }}
+          BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
         run: |
-          git config --global url."https://x-token-auth:${BITBUCKET_TOKEN}@bitbucket.org/".insteadOf "https://bitbucket.org/"
-          git clone https://bitbucket.org/${{ vars.BITBUCKET_WORKSPACE }}/${{ vars.BITBUCKET_REPO }}.git bitbucket-repo
+          set -euo pipefail
+          : "${BITBUCKET_WORKSPACE_NAME:?BITBUCKET_WORKSPACE_NAME is required}"
+          : "${BITBUCKET_REPOSITORY_NAME:?BITBUCKET_REPOSITORY_NAME is required}"
+          if [ -z "${BITBUCKET_API_TOKEN}" ]; then
+            echo "BITBUCKET_API_TOKEN not set" >&2
+            exit 1
+          fi
+
+          ASKPASS_SCRIPT="$(mktemp)"
+          trap 'rm -f "$ASKPASS_SCRIPT"' EXIT
+          printf '#!/bin/sh\necho "$BITBUCKET_API_TOKEN"\n' > "$ASKPASS_SCRIPT"
+          chmod +x "$ASKPASS_SCRIPT"
+          export GIT_ASKPASS="$ASKPASS_SCRIPT"
+
+          BITBUCKET_REPO_URL="https://bitbucket.org/${BITBUCKET_WORKSPACE_NAME}/${BITBUCKET_REPOSITORY_NAME}.git"
+          REPO_URL="https://x-token-auth@${BITBUCKET_REPO_URL#https://}"
+          git clone "${REPO_URL}" bitbucket-repo
+
           cd bitbucket-repo
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -48,21 +67,34 @@ jobs:
 
       # 4. ビルド成果物 (.whl / .tar.gz) をコピーしてプッシュ (パッケージ名はリポジトリ名から動的に決定)
       - name: Copy Packages and Push
+        env:
+          BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag_name }}
         run: |
+          set -euo pipefail
+          : "${BITBUCKET_WORKSPACE_NAME:?BITBUCKET_WORKSPACE_NAME is required}"
+          : "${BITBUCKET_REPOSITORY_NAME:?BITBUCKET_REPOSITORY_NAME is required}"
           PACKAGE_NAME="${{ github.event.repository.name }}"
-          
+
           # コピー先フォルダの作成
           mkdir -p "bitbucket-repo/packages/$PACKAGE_NAME/"
-          
+
           # ビルドされた成果物 (dist/*) をコピー
           cp dist/* "bitbucket-repo/packages/$PACKAGE_NAME/"
-          
+
+          # GIT_ASKPASS の設定
+          ASKPASS_SCRIPT="$(mktemp)"
+          trap 'rm -f "$ASKPASS_SCRIPT"' EXIT
+          printf '#!/bin/sh\necho "$BITBUCKET_API_TOKEN"\n' > "$ASKPASS_SCRIPT"
+          chmod +x "$ASKPASS_SCRIPT"
+          export GIT_ASKPASS="$ASKPASS_SCRIPT"
+
           cd bitbucket-repo
           git add -A
           if git diff-index --quiet HEAD; then
             echo "No changes"
           else
-            git commit -m "chore: deploy $PACKAGE_NAME ${{ steps.release.outputs.tag_name }} [skip ci]"
+            git commit -m "chore: deploy $PACKAGE_NAME ${RELEASE_TAG} [skip ci]"
             git push origin HEAD
           fi
         if: ${{ steps.release.outputs.release_created }}

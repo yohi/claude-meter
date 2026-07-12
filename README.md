@@ -17,7 +17,7 @@ With `uvx` (running directly from the built package on Bitbucket):
 ```bash
 # Run using the published tar.gz package.
 # (Replace 0.1.0 with your target version, and specify your workspace and repository)
-uvx --from https://bitbucket.org/<BITBUCKET_WORKSPACE>/<BITBUCKET_REPO>/raw/master/packages/claude-meter/claude-meter-0.1.0.tar.gz claude-meter start
+uvx --from https://bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/<BITBUCKET_REPOSITORY_NAME>/raw/master/packages/claude-meter/claude-meter-0.1.0.tar.gz claude-meter start
 ```
 <!-- markdownlint-enable MD013 -->
 
@@ -211,7 +211,7 @@ repository automatically, set up the following authentication settings:
 2. Go to **Settings** -> **Secrets and variables** -> **Actions** in the left menu.
 3. Click **New repository secret**.
 4. Add the secret with:
-   - **Name**: `BITBUCKET_TOKEN`
+   - **Name**: `BITBUCKET_API_TOKEN`
    - **Secret**: The copied **Bitbucket App password**
 5. Click **Add secret** to save.
 
@@ -221,6 +221,6 @@ repository automatically, set up the following authentication settings:
    click the **Variables** tab (next to the Secrets tab).
 2. Click **New repository variable**.
 3. Add the following variables:
-   - **BITBUCKET_WORKSPACE**: e.g. `dh_ohi` (Your Bitbucket Workspace name)
-   - **BITBUCKET_REPO**: e.g. `claude-plugins`
+   - **BITBUCKET_WORKSPACE_NAME**: e.g. `dh_ohi` (Your Bitbucket Workspace name)
+   - **BITBUCKET_REPOSITORY_NAME**: e.g. `claude-plugins`
      (Your Bitbucket target repository name)
