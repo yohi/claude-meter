@@ -26,6 +26,18 @@ def _resolve_ui_endpoint(config: Config, port: int | None, host: str | None) -> 
     ui_host = host or config.ui.host
     return ui_port, ui_host
 
+def _poll_explicitly_set(ctx: click.Context, param: click.Option, value: float) -> float:
+    """Mark --poll as explicitly provided so we can warn without --watch."""
+    ctx.ensure_object(dict)
+    ctx.obj["poll_explicit"] = True
+    return value
+
+
+def _warn_poll_without_watch(ctx: click.Context, watch_logs: bool, poll: float) -> None:
+    if ctx.obj.get("poll_explicit") and not watch_logs:
+        click.echo(
+            "Warning: --poll is ignored unless --watch is also set.", err=True
+        )
 
 def _start_watcher(config: Config, poll: float) -> threading.Thread:
     watcher_thread: threading.Thread = threading.Thread(
@@ -132,10 +144,13 @@ def config() -> None:
     default=5.0,
     show_default=True,
     type=float,
+    callback=_poll_explicitly_set,
     help="Polling interval in seconds for --watch (watchdog fallback).",
 )
-def ui(port: int | None, host: str | None, watch_logs: bool, poll: float) -> None:
+@click.pass_context
+def ui(ctx: click.Context, port: int | None, host: str | None, watch_logs: bool, poll: float) -> None:
     """Launch the Streamlit UI."""
+    _warn_poll_without_watch(ctx, watch_logs, poll)
     config = _config_and_db()
     ui_port, ui_host = _resolve_ui_endpoint(config, port, host)
     if watch_logs:
