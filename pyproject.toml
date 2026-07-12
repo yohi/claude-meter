@@ -26,6 +26,7 @@ dependencies = [
     # certain DataFrames to Arrow (see streamlit/streamlit#14609, #14617). Pin below 3
     # until the ecosystem (streamlit/pyarrow) stabilizes this interaction.
     "pandas>=2.2,<3",
+    "pyarrow==24.0.0",
     "click>=8.1",
 ]
 
