@@ -4,6 +4,7 @@ import math
 import numbers
 import sqlite3
 from contextlib import closing
+from dataclasses import dataclass
 
 import pandas as pd
 import streamlit as st
@@ -143,30 +144,42 @@ def _format_project_label(project: object, git_repository: object) -> str:
     return label
 
 
-def _card_label(row: pd.Series) -> str:
+@dataclass(frozen=True, slots=True)
+class _RequestCardDisplay:
+    cost: str
+    duration: str
+    input_tokens: str
+    output_tokens: str
+
+
+def _card_label(row: pd.Series, display: _RequestCardDisplay) -> str:
     """Build the compact one-line summary shown on a collapsed request card."""
     model = display_model_name(str(row["model"]))
-    in_tokens = _format_tokens(row["input_tokens"])
-    out_tokens = _format_tokens(row["output_tokens"])
     return " · ".join(
         [
             str(row["timestamp"]),
             f"**{model}**",
-            f"{in_tokens} イン / {out_tokens} アウト",
-            _format_cost(row["cost_usd"]),
-            _format_duration(row.get("response_time_ms")),
+            f"{display.input_tokens} イン / {display.output_tokens} アウト",
+            display.cost,
+            display.duration,
         ]
     )
 
 
 def _render_request_card(row: pd.Series, *, show_prompts: bool, expanded: bool) -> None:
     """Render one request as a collapsible card with metrics and text panes."""
-    with st.expander(_card_label(row), expanded=expanded):
+    display = _RequestCardDisplay(
+        cost=_format_cost(row["cost_usd"]),
+        duration=_format_duration(row["response_time_ms"]),
+        input_tokens=_format_tokens(row["input_tokens"]),
+        output_tokens=_format_tokens(row["output_tokens"]),
+    )
+    with st.expander(_card_label(row, display), expanded=expanded):
         cost_col, duration_col, input_col, output_col = st.columns(4)
-        cost_col.metric("料金", _format_cost(row["cost_usd"]))
-        duration_col.metric("期間", _format_duration(row.get("response_time_ms")))
-        input_col.metric("入力", _format_tokens(row["input_tokens"]))
-        output_col.metric("出力", _format_tokens(row["output_tokens"]))
+        cost_col.metric("料金", display.cost)
+        duration_col.metric("期間", display.duration)
+        input_col.metric("入力", display.input_tokens)
+        output_col.metric("出力", display.output_tokens)
         if show_prompts:
             request_col, response_col = st.columns(2)
             request_col.caption("リクエスト")
@@ -178,8 +191,7 @@ def _render_request_card(row: pd.Series, *, show_prompts: bool, expanded: bool) 
         st.caption(f"project: {project} · request_id: {request_id}")
 
 
-def _render_request_cards(requests_df: pd.DataFrame, show_prompts: bool, search: str) -> None:
-    """Render the per-session request list as collapsible cards, filtered by search."""
+def _filter_requests(requests_df: pd.DataFrame, show_prompts: bool, search: str) -> pd.DataFrame:
     if show_prompts and search:
         prompt_hits = requests_df["prompt_text"].str.contains(
             search, na=False, case=False, regex=False
@@ -187,7 +199,13 @@ def _render_request_cards(requests_df: pd.DataFrame, show_prompts: bool, search:
         response_hits = requests_df["response_text"].str.contains(
             search, na=False, case=False, regex=False
         )
-        requests_df = requests_df[prompt_hits | response_hits]
+        return requests_df[prompt_hits | response_hits]
+    return requests_df
+
+
+def _render_request_cards(requests_df: pd.DataFrame, show_prompts: bool, search: str) -> None:
+    """Render the per-session request list as collapsible cards, filtered by search."""
+    requests_df = _filter_requests(requests_df, show_prompts, search)
     if requests_df.empty:
         st.info("リクエストが見つかりません。")
         return

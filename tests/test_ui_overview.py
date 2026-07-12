@@ -1,10 +1,11 @@
 from contextlib import closing
-from datetime import timedelta, timezone
+from datetime import date, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
 from claude_meter.db import get_connection, init_db
+from claude_meter.ui import overview
 from claude_meter.ui.overview import (
     _daily_cost,
     _summary_for_period,
@@ -37,6 +38,12 @@ def test_tz_offset_modifiers_for_fixed_offsets() -> None:
         "+5 hours",
         "+30 minutes",
     ]
+
+
+def test_utc_date_boundary_converts_local_midnight() -> None:
+    local_tz = timezone(timedelta(hours=9))
+
+    assert overview._utc_date_boundary(date(2026, 7, 12), local_tz) == "2026-07-11T15:00:00+00:00"
 
 
 def test_daily_cost_buckets_by_local_day(tmp_path: Path) -> None:

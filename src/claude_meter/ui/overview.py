@@ -1,7 +1,7 @@
 """Overview dashboard page."""
 
 from contextlib import closing
-from datetime import datetime, timedelta, timezone, tzinfo
+from datetime import date, datetime, time, timedelta, timezone, tzinfo
 import sqlite3
 from typing import Any
 
@@ -54,6 +54,10 @@ def _tz_offset_modifiers(tz: tzinfo) -> list[str]:
     if minutes:
         modifiers.append(f"{sign}{minutes} minutes")
     return modifiers
+
+
+def _utc_date_boundary(day: date, tz: tzinfo) -> str:
+    return datetime.combine(day, time.min, tzinfo=tz).astimezone(timezone.utc).isoformat()
 
 
 def _local_date_expr(tz_modifiers: list[str]) -> str:
@@ -181,18 +185,20 @@ def render() -> None:
     tz_modifiers = _tz_offset_modifiers(resolved_tz)
     today = datetime.now(resolved_tz).date()
     if period == "Today":
-        start = today.isoformat()
-        end = (today + timedelta(days=1)).isoformat()
+        start_day = today
+        end_day = today + timedelta(days=1)
     elif period == "Last 7 days":
-        start = (today - timedelta(days=6)).isoformat()
-        end = (today + timedelta(days=1)).isoformat()
+        start_day = today - timedelta(days=6)
+        end_day = today + timedelta(days=1)
     elif period == "Last 30 days":
-        start = (today - timedelta(days=29)).isoformat()
-        end = (today + timedelta(days=1)).isoformat()
+        start_day = today - timedelta(days=29)
+        end_day = today + timedelta(days=1)
     else:
         col1, col2 = st.columns(2)
-        start = str(col1.date_input("Start", today - timedelta(days=6)))
-        end = str(col2.date_input("End", today) + timedelta(days=1))
+        start_day = col1.date_input("Start", today - timedelta(days=6))
+        end_day = col2.date_input("End", today) + timedelta(days=1)
+    start = _utc_date_boundary(start_day, resolved_tz)
+    end = _utc_date_boundary(end_day, resolved_tz)
 
     with closing(get_connection(config.storage.db_path)) as conn:
         summary = _summary_for_period(conn, start, end)

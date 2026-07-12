@@ -1,10 +1,12 @@
 from contextlib import closing
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from claude_meter.db import get_connection, init_db
+from claude_meter.ui import session_explorer
 from claude_meter.ui.session_explorer import (
     _coerce_float,
     _format_cost,
@@ -69,10 +71,37 @@ def test_text_or_empty() -> None:
 def test_coerce_float() -> None:
     assert _coerce_float(1.5) == pytest.approx(1.5)
     assert _coerce_float(2) == pytest.approx(2.0)
-    assert _coerce_float(2) == pytest.approx(2.0)
+    assert _coerce_float(np.int64(2)) == pytest.approx(2.0)
     assert _coerce_float(None) is None
     assert _coerce_float(float("nan")) is None
     assert _coerce_float("x") is None
+
+
+def test_filter_requests_matches_prompt_or_response_as_literal_text() -> None:
+    requests = pd.DataFrame(
+        {
+            "prompt_text": ["Find [this]", None, "unrelated"],
+            "response_text": [None, "FOUND [THIS] here", "unrelated"],
+        }
+    )
+
+    filtered = session_explorer._filter_requests(requests, show_prompts=True, search="[this]")
+
+    assert filtered.index.tolist() == [0, 1]
+
+
+def test_card_label_uses_preformatted_display_values() -> None:
+    row = pd.Series({"timestamp": "2026-07-12T00:00:00+00:00", "model": "claude-haiku"})
+    display = session_explorer._RequestCardDisplay(
+        cost="$0.1234", duration="250 ms", input_tokens="1,000", output_tokens="500"
+    )
+
+    label = session_explorer._card_label(row, display)
+
+    assert (
+        label
+        == "2026-07-12T00:00:00+00:00 · **claude-haiku** · 1,000 イン / 500 アウト · $0.1234 · 250 ms"
+    )
 
 
 def test_format_project_label() -> None:

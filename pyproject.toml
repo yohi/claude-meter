@@ -13,7 +13,7 @@ authors = [
     {name = "Yusuke Ohi"}
 ]
 dependencies = [
-    "streamlit>=1.33",
+    "streamlit>=1.49",
     "watchdog>=4.0",
     "requests>=2.31",
     "pydantic>=2.7",
