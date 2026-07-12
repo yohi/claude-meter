@@ -28,6 +28,7 @@ jobs:
         if: ${{ steps.release.outputs.release_created }}
         with:
           ref: ${{ steps.release.outputs.tag_name }}
+          fetch-depth: 0
 
       # 2. uv のセットアップとビルド
       - name: Install uv
