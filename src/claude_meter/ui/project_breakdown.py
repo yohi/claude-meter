@@ -13,13 +13,13 @@ from claude_meter.db import get_connection
 
 def _project_summary(conn: sqlite3.Connection) -> pd.DataFrame:
     rows = conn.execute(
-        """SELECT project,
+        """SELECT COALESCE(project, '-') AS project_name,
                   COUNT(*) AS requests,
                   COALESCE(SUM(cost_usd), 0) AS total_cost,
                   COALESCE(SUM(input_tokens), 0) AS input_tokens,
                   COALESCE(SUM(output_tokens), 0) AS output_tokens
            FROM requests
-           GROUP BY project
+           GROUP BY COALESCE(project, '-')
            ORDER BY total_cost DESC"""
     ).fetchall()
     return pd.DataFrame(

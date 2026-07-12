@@ -87,10 +87,10 @@ def _daily_cost(
 
 def _project_cost(conn: sqlite3.Connection, start: str, end: str) -> pd.DataFrame:
     rows = conn.execute(
-        """SELECT project, SUM(cost_usd) AS cost
+        """SELECT COALESCE(project, '-') AS project_name, SUM(cost_usd) AS cost
            FROM requests
            WHERE timestamp >= ? AND timestamp < ?
-           GROUP BY project
+           GROUP BY COALESCE(project, '-')
            ORDER BY cost DESC""",
         (start, end),
     ).fetchall()
