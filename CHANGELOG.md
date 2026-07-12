@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.4](https://github.com/yohi/claude-meter/compare/v0.3.3...v0.3.4) (2026-07-12)
+
+
+### Bug Fixes
+
+* pyproject.tomlに動作確認済みのpyarrow==24.0.0を追記し、Streamlitシリアライズ時のクラッシュを防止 ([f0807e9](https://github.com/yohi/claude-meter/commit/f0807e9e2f55ddae77ff3ff30dd73bd604c7bab8))
+* pyproject.tomlに動作確認済みのpyarrow==24.0.0を追記し、Streamlitシリアライズ時のクラッシュを防止 ([fdb9865](https://github.com/yohi/claude-meter/commit/fdb98658035ffa00ae61bb919637022861112f20))
+
 ## [0.3.3](https://github.com/yohi/claude-meter/compare/v0.3.2...v0.3.3) (2026-07-12)
 
 
