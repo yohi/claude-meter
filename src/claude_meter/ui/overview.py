@@ -1,7 +1,7 @@
 """Overview dashboard page."""
 
 from contextlib import closing
-from datetime import datetime, timedelta, tzinfo
+from datetime import datetime, timedelta, timezone, tzinfo
 import sqlite3
 from typing import Any
 
@@ -42,7 +42,7 @@ def _tz_offset_modifiers(tz: tzinfo) -> list[str]:
     Examples: UTC+9 -> ``["+9 hours"]``, UTC-5 -> ``["-5 hours"]``,
     UTC+5:30 -> ``["+5 hours", "+30 minutes"]``, UTC -> ``[]``.
     """
-    offset = tz.utcoffset(datetime.now())
+    offset = datetime.now(timezone.utc).astimezone(tz).utcoffset()
     if offset is None:
         return []
     total_minutes = round(offset.total_seconds() / 60)
