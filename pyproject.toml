@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "claude-meter"
-version = "0.3.3"
+version = "0.3.4"
 description = "Local ClaudeCode usage and cost analyzer"
 readme = "README.md"
 requires-python = ">=3.10"
