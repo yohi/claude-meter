@@ -80,11 +80,21 @@ jobs:
           find bitbucket-repo -mindepth 1 -maxdepth 1 -not -name ".git" -not -name "packages" -exec rm -rf {} +
 
           # ソースコード、設定ファイル、READMEなどをコピー (存在するもののみ)
-          for item in src pyproject.toml README.md LICENSE; do
+          for item in src pyproject.toml LICENSE; do
             if [ -e "$item" ]; then
               cp -r "$item" bitbucket-repo/
             fi
           done
+
+          # Bitbucket用にREADME_BITBUCKET.mdをREADME.mdとしてコピーし、プレースホルダーを置換
+          if [ -e README_BITBUCKET.md ]; then
+            sed -e "s/<BITBUCKET_WORKSPACE_NAME>/${BITBUCKET_WORKSPACE_NAME}/g" \
+                -e "s/<BITBUCKET_REPOSITORY_NAME>/${BITBUCKET_REPOSITORY_NAME}/g" \
+                -e "s/<VERSION>/${RELEASE_TAG#v}/g" \
+                README_BITBUCKET.md > bitbucket-repo/README.md
+          elif [ -e README.md ]; then
+            cp README.md bitbucket-repo/
+          fi
 
           # コピー先フォルダの作成
           mkdir -p "bitbucket-repo/packages/$PACKAGE_NAME/"
