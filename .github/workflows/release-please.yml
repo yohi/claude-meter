@@ -66,8 +66,10 @@ jobs:
           git remote add bitbucket-mirror "${MIRROR_REPO_URL}"
           
           # Fetch Bitbucket master and merge it to handle previous deployment commits
-          git fetch bitbucket-mirror master
-          git merge bitbucket-mirror/master --no-edit
+          # Skip merge if remote master does not exist yet (e.g., first push)
+          if git fetch bitbucket-mirror master; then
+            git merge bitbucket-mirror/master --no-edit
+          fi
           
           git push bitbucket-mirror HEAD:master
           git push bitbucket-mirror "refs/tags/${RELEASE_TAG}"
