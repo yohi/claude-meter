@@ -28,7 +28,6 @@ jobs:
         if: ${{ steps.release.outputs.release_created }}
         with:
           ref: ${{ steps.release.outputs.tag_name }}
-          fetch-depth: 0
 
       # 2. uv のセットアップとビルド
       - name: Install uv
@@ -80,8 +79,12 @@ jobs:
           # 古いソースコードやファイルを削除 (packages と .git 以外)
           find bitbucket-repo -mindepth 1 -maxdepth 1 -not -name ".git" -not -name "packages" -exec rm -rf {} +
 
-          # ソースコード、設定ファイル、READMEなどをコピー
-          cp -r src pyproject.toml README.md LICENSE bitbucket-repo/
+          # ソースコード、設定ファイル、READMEなどをコピー (存在するもののみ)
+          for item in src pyproject.toml README.md LICENSE; do
+            if [ -e "$item" ]; then
+              cp -r "$item" bitbucket-repo/
+            fi
+          done
 
           # コピー先フォルダの作成
           mkdir -p "bitbucket-repo/packages/$PACKAGE_NAME/"
@@ -104,4 +107,8 @@ jobs:
             git commit -m "chore: deploy $PACKAGE_NAME ${RELEASE_TAG} [skip ci]"
             git push origin HEAD
           fi
+
+          # デプロイしたコミットにリリースタグを設定してプッシュ (git+httpsでのタグ付きインストールに対応するため)
+          git tag -f "${RELEASE_TAG}" HEAD
+          git push origin "${RELEASE_TAG}"
         if: ${{ steps.release.outputs.release_created }}
