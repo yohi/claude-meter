@@ -110,5 +110,5 @@ jobs:
 
           # デプロイしたコミットにリリースタグを設定してプッシュ (git+httpsでのタグ付きインストールに対応するため)
           git tag -f "${RELEASE_TAG}" HEAD
-          git push origin "${RELEASE_TAG}"
+          git push --force origin "${RELEASE_TAG}"
         if: ${{ steps.release.outputs.release_created }}
