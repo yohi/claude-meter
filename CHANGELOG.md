@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.1](https://github.com/yohi/claude-meter/compare/v0.3.0...v0.3.1) (2026-07-12)
+
+
+### Bug Fixes
+
+* **readme:** Bitbucket用の日本語READMEのバージョン表示を自動化 ([61cfde0](https://github.com/yohi/claude-meter/commit/61cfde0a5895551d57ddd69e01d387b109177dd9))
+
+
+### Documentation
+
+* Bitbucket用の日本語READMEの作成とActionsによるプレースホルダー置換の追加 ([988717f](https://github.com/yohi/claude-meter/commit/988717f7c0fccf1d692d58a5ebd564bbf66b799f))
+* Bitbucket用の日本語READMEの作成と自動置換デプロイの追加 ([a1315ff](https://github.com/yohi/claude-meter/commit/a1315ffc8a88a69b81f509331ec2b5582622209b))
+
 ## [0.3.0](https://github.com/yohi/claude-meter/compare/v0.2.3...v0.3.0) (2026-07-12)
 
 
