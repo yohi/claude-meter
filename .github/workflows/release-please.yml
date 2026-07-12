@@ -38,6 +38,28 @@ jobs:
         if: ${{ steps.release.outputs.release_created }}
 
       # 3. Bitbucket リポジトリのクローン
+      - name: Push to Bitbucket Mirror
+        env:
+          BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          : "${BITBUCKET_WORKSPACE_NAME:?BITBUCKET_WORKSPACE_NAME is required}"
+          if [ -z "${BITBUCKET_API_TOKEN}" ]; then
+            echo "BITBUCKET_API_TOKEN not set" >&2
+            exit 1
+          fi
+
+          MIRROR_REPO_URL="https://bitbucket.org/${BITBUCKET_WORKSPACE_NAME}/${{ github.event.repository.name }}.git"
+          AUTH_MIRROR_URL="https://x-token-auth:${BITBUCKET_API_TOKEN}@${MIRROR_REPO_URL#https://}"
+
+          # Push the release branch and the tag to Bitbucket mirror
+          git remote add bitbucket-mirror "${AUTH_MIRROR_URL}"
+          git push bitbucket-mirror HEAD:master
+          git push bitbucket-mirror "refs/tags/${RELEASE_TAG}"
+        if: ${{ steps.release.outputs.release_created }}
+
+      # 4. Bitbucket リポジトリのクローン
       - name: Clone Bitbucket Repo
         env:
           BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
@@ -65,7 +87,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
         if: ${{ steps.release.outputs.release_created }}
 
-      # 4. ビルド成果物 (.whl / .tar.gz) をコピーしてプッシュ (パッケージ名はリポジトリ名から動的に決定)
+      # 5. ビルド成果物 (.whl / .tar.gz) をコピーしてプッシュ (パッケージ名はリポジトリ名から動的に決定)
       - name: Copy Packages and Push
         env:
           BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}

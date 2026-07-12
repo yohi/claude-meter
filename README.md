@@ -11,13 +11,16 @@ background log watching):
 uv run claude-meter start   # or: uv run cm start
 ```
 
-With `uvx` (running directly from the built package on Bitbucket):
+With `uvx` (running directly from the built package or repository on Bitbucket):
 
 <!-- markdownlint-disable MD013 -->
 ```bash
 # Run using the published tar.gz package.
 # (Replace 0.1.0 with your target version, and specify your workspace and repository)
 uvx --from https://bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/<BITBUCKET_REPOSITORY_NAME>/raw/master/packages/claude-meter/claude-meter-0.1.0.tar.gz claude-meter start
+
+# Or run directly from the Git repository (Replace <BITBUCKET_WORKSPACE_NAME> with your workspace)
+uvx --from git+https://bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/claude-meter.git claude-meter start
 ```
 <!-- markdownlint-enable MD013 -->
 
