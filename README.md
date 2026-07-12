@@ -11,6 +11,16 @@ background log watching):
 uv run claude-meter start   # or: uv run cm start
 ```
 
+With `uvx` (running directly from the built package on Bitbucket):
+
+<!-- markdownlint-disable MD013 -->
+```bash
+# Run using the published tar.gz package.
+# (Replace 0.1.0 with your target version, and specify your workspace and repository)
+uvx --from https://bitbucket.org/<BITBUCKET_WORKSPACE>/<BITBUCKET_REPO>/raw/master/packages/claude-meter/claude-meter-0.1.0.tar.gz claude-meter start
+```
+<!-- markdownlint-enable MD013 -->
+
 With `pip`:
 
 ```bash
@@ -177,3 +187,40 @@ pydantic-settings, Altair, pandas, Click.
 - AWS CloudTrail / Bedrock log analysis
 - IAM-requiring Cost Explorer integration
 - Cloud-based data sharing or aggregation
+
+## Bitbucket deployment setup
+
+To allow GitHub Actions to build and deploy packages to the Bitbucket
+repository automatically, set up the following authentication settings:
+
+### 1. Issue an App password in Bitbucket
+
+1. Log in to Bitbucket, click on your profile icon in the top right, and
+   select **Personal settings**.
+2. Select **App passwords** under **Access management** on the left menu.
+3. Click **Create app password**.
+4. Enter the following details:
+   - **Label**: `GitHub Actions Deploy` (or any descriptive label)
+   - **Permissions**:
+     - **Repositories**: **Write** (and Read)
+5. Click **Create** and copy the generated password.
+
+### 2. Register the token in GitHub Secrets
+
+1. Open the `claude-meter` repository on GitHub.
+2. Go to **Settings** -> **Secrets and variables** -> **Actions** in the left menu.
+3. Click **New repository secret**.
+4. Add the secret with:
+   - **Name**: `BITBUCKET_TOKEN`
+   - **Secret**: The copied **Bitbucket App password**
+5. Click **Add secret** to save.
+
+### 3. Register Repository Variables in GitHub
+
+1. In the same **Settings** -> **Secrets and variables** -> **Actions** page,
+   click the **Variables** tab (next to the Secrets tab).
+2. Click **New repository variable**.
+3. Add the following variables:
+   - **BITBUCKET_WORKSPACE**: e.g. `dh_ohi` (Your Bitbucket Workspace name)
+   - **BITBUCKET_REPO**: e.g. `claude-plugins`
+     (Your Bitbucket target repository name)
