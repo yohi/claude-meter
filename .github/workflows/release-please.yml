@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   release-please:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       # 1. release-please-action でリリースPR / タグ作成を自動化
       - uses: googleapis/release-please-action@v4
@@ -39,7 +39,8 @@ jobs:
         env:
           BITBUCKET_TOKEN: ${{ secrets.BITBUCKET_TOKEN }}
         run: |
-          git clone https://x-token-auth:${BITBUCKET_TOKEN}@bitbucket.org/${{ vars.BITBUCKET_WORKSPACE }}/${{ vars.BITBUCKET_REPO }}.git bitbucket-repo
+          git config --global url."https://x-token-auth:${BITBUCKET_TOKEN}@bitbucket.org/".insteadOf "https://bitbucket.org/"
+          git clone https://bitbucket.org/${{ vars.BITBUCKET_WORKSPACE }}/${{ vars.BITBUCKET_REPO }}.git bitbucket-repo
           cd bitbucket-repo
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -47,8 +48,6 @@ jobs:
 
       # 4. ビルド成果物 (.whl / .tar.gz) をコピーしてプッシュ (パッケージ名はリポジトリ名から動的に決定)
       - name: Copy Packages and Push
-        env:
-          BITBUCKET_TOKEN: ${{ secrets.BITBUCKET_TOKEN }}
         run: |
           PACKAGE_NAME="${{ github.event.repository.name }}"
           
@@ -64,6 +63,6 @@ jobs:
             echo "No changes"
           else
             git commit -m "chore: deploy $PACKAGE_NAME ${{ steps.release.outputs.tag_name }} [skip ci]"
-            git push https://x-token-auth:${BITBUCKET_TOKEN}@bitbucket.org/${{ vars.BITBUCKET_WORKSPACE }}/${{ vars.BITBUCKET_REPO }}.git HEAD
+            git push origin HEAD
           fi
         if: ${{ steps.release.outputs.release_created }}
