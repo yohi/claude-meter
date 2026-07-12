@@ -16,7 +16,7 @@ def _model_summary(conn: sqlite3.Connection) -> pd.DataFrame:
     rows = conn.execute(
         """SELECT model,
                   COUNT(*) AS requests,
-                  SUM(cost_usd) AS total_cost,
+                  COALESCE(SUM(cost_usd), 0.0) AS total_cost,
                   SUM(
                       COALESCE(input_tokens, 0)
                       + COALESCE(output_tokens, 0)

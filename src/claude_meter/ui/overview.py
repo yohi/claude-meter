@@ -75,7 +75,7 @@ def _daily_cost(
 ) -> pd.DataFrame:
     date_expr = _local_date_expr(tz_modifiers)
     rows = conn.execute(
-        f"""SELECT {date_expr} AS date, SUM(cost_usd) AS cost
+        f"""SELECT {date_expr} AS date, COALESCE(SUM(cost_usd), 0.0) AS cost
            FROM requests
            WHERE timestamp >= ? AND timestamp < ?
            GROUP BY {date_expr}
@@ -87,7 +87,7 @@ def _daily_cost(
 
 def _project_cost(conn: sqlite3.Connection, start: str, end: str) -> pd.DataFrame:
     rows = conn.execute(
-        """SELECT COALESCE(project, '-') AS project_name, SUM(cost_usd) AS cost
+        """SELECT COALESCE(project, '-') AS project_name, COALESCE(SUM(cost_usd), 0.0) AS cost
            FROM requests
            WHERE timestamp >= ? AND timestamp < ?
            GROUP BY COALESCE(project, '-')
@@ -109,7 +109,7 @@ def _model_tokens(conn: sqlite3.Connection, start: str, end: str) -> pd.DataFram
            FROM requests
            WHERE timestamp >= ? AND timestamp < ?
            GROUP BY model""",
-        (start, end),
+         (start, end),
     ).fetchall()
     return pd.DataFrame(rows, columns=["model", "tokens"])
 
@@ -119,7 +119,7 @@ def _daily_avg_response_time(
 ) -> pd.DataFrame:
     date_expr = _local_date_expr(tz_modifiers)
     rows = conn.execute(
-        f"""SELECT {date_expr} AS date, AVG(response_time_ms) AS avg_response_time_ms
+        f"""SELECT {date_expr} AS date, COALESCE(AVG(response_time_ms), 0.0) AS avg_response_time_ms
            FROM requests
            WHERE timestamp >= ? AND timestamp < ? AND response_time_ms IS NOT NULL
            GROUP BY {date_expr}
