@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.0](https://github.com/yohi/claude-meter/compare/v0.1.0...v0.2.0) (2026-07-12)
+
+
+### Features
+
+* **ci:** release-pleaseでBitbucketミラーへのプッシュを追加しgit+httpsインストールに対応 ([e2aa075](https://github.com/yohi/claude-meter/commit/e2aa0756bfd3e39bc312f1d96d8d3f2b70a7e708))
+* **ci:** release-pleaseでBitbucketミラーへのプッシュを追加しgit+httpsインストールに対応 ([674b581](https://github.com/yohi/claude-meter/commit/674b5811453ae911a265db9422e3edacfc21fc9c))
+
 ## 0.1.0 (2026-07-12)
 
 
