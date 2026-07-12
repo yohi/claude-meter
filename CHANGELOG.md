@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.3](https://github.com/yohi/claude-meter/compare/v0.3.2...v0.3.3) (2026-07-12)
+
+
+### Bug Fixes
+
+* **ui:** 各集計クエリにおけるSUM/AVG値のNULL判定とCOALESCEによる0.0置き換えを徹底し、Altairのセグフォを防止 ([082c021](https://github.com/yohi/claude-meter/commit/082c021fa47862a3f8a94e179f4ee395f9268a62))
+* **ui:** 各集計クエリにおけるSUM/AVG値のNULL判定とCOALESCEによる0.0置き換えを徹底し、Altairのセグフォを防止 ([2b5f283](https://github.com/yohi/claude-meter/commit/2b5f2836ee969a02efc0ca3c93dee84d8c2a885c))
+
 ## [0.3.2](https://github.com/yohi/claude-meter/compare/v0.3.1...v0.3.2) (2026-07-12)
 
 
