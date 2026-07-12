@@ -300,8 +300,9 @@ Launched via `claude-meter ui` at `http://127.0.0.1:8501`.
 - Cost by project (bar chart)
 - Token distribution by model (pie chart)
 - Average response time trend (line chart)
-- Top 10 costly prompts (table; prompt text shown only when
-  `privacy.show_prompts_in_ui` is true)
+- Top costly prompts (table; when `privacy.show_prompts_in_ui` is true, rows
+  are aggregated by prompt text with total cost and occurrence count; prompt
+  text is omitted and rows are shown unaggregated when disabled)
 
 ### Session Explorer page
 
@@ -326,7 +327,8 @@ Tool name: `claude-meter` (alias `cm`)
 | `claude-meter collect` | Parse JSONL logs once and backfill costs |
 | `claude-meter collect --reparse` | Re-ingest all JSONL files from start |
 | `claude-meter watch [--poll N]` | Watch configured data dir for new data |
-| `claude-meter ui [--port N] [--host H]` | Launch the Streamlit UI |
+| `claude-meter ui [--port N] [--host H] [--watch]` | Launch the Streamlit UI |
+| `claude-meter start [--port N] [--host H]` | Init if needed, then launch UI |
 | `claude-meter pricing update [--force]` | Refresh Bedrock pricing cache |
 | `claude-meter config` | Show the config file path |
 
@@ -357,6 +359,7 @@ privacy:
 ui:
   port: 8501
   host: "127.0.0.1"
+  timezone: null            # IANA name; null = auto-detect system TZ
 ```
 
 ## Multi-OS support

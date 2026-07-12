@@ -1,6 +1,8 @@
 """Configuration management and OS-specific path resolution."""
 
 import os
+import zoneinfo
+from datetime import datetime, timezone, tzinfo
 from pathlib import Path
 from typing import Literal
 
@@ -35,6 +37,7 @@ class _PrivacyConfig(BaseModel):
 class _UiConfig(BaseModel):
     port: int = Field(default=8501)
     host: str = Field(default="127.0.0.1")
+    timezone: str | None = Field(default=None)
 
 
 class Config(BaseSettings):
@@ -70,6 +73,50 @@ def default_claude_dir() -> Path:
         base = Path(local_app_data) if local_app_data else Path.home() / "AppData" / "Local"
         return base / "Claude"
     return Path.home() / ".claude"
+
+
+def detect_system_timezone() -> str | None:
+    """Return the system's local IANA timezone name, or ``None`` if unknown.
+
+    Uses only the standard library, checking in order:
+
+    1. The ``TZ`` environment variable, when set.
+    2. On POSIX systems, the symlink target of ``/etc/localtime``: the path
+       segment after ``zoneinfo/`` (e.g. ``/usr/share/zoneinfo/Asia/Tokyo``
+       yields ``Asia/Tokyo``).
+
+    Returns ``None`` when no IANA name can be determined; callers then fall
+    back to a fixed-offset local time via :func:`resolve_tzinfo`.
+    """
+    tz_env = os.environ.get("TZ")
+    if tz_env:
+        return tz_env
+    if os.name != "nt":
+        localtime = Path("/etc/localtime")
+        if localtime.is_symlink():
+            _, _, iana_name = localtime.readlink().as_posix().partition("zoneinfo/")
+            if iana_name:
+                return iana_name
+    return None
+
+
+def resolve_tzinfo(name: str | None) -> tzinfo:
+    """Resolve a timezone *name* to a concrete :class:`~datetime.tzinfo`.
+
+    ``name`` takes precedence; when it is ``None`` the auto-detected system
+    timezone (:func:`detect_system_timezone`) is used. Resolution is attempted
+    via :class:`zoneinfo.ZoneInfo`; on failure (unknown name or invalid value)
+    it falls back to the process's local timezone (a fixed offset) and finally
+    to UTC.
+    """
+    candidate = name or detect_system_timezone()
+    if candidate is not None:
+        try:
+            return zoneinfo.ZoneInfo(candidate)
+        except (zoneinfo.ZoneInfoNotFoundError, ValueError):
+            pass
+    local_tzinfo = datetime.now().astimezone().tzinfo
+    return local_tzinfo if local_tzinfo is not None else timezone.utc
 
 
 def load_config(path: Path | None = None) -> Config:

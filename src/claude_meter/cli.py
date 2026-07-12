@@ -4,6 +4,7 @@ from pathlib import Path
 
 import subprocess
 import sys
+import threading
 
 import click
 
@@ -19,6 +20,63 @@ def _config_and_db() -> Config:
     config = load_config()
     init_db(config.storage.db_path)
     return config
+
+def _resolve_ui_endpoint(config: Config, port: int | None, host: str | None) -> tuple[int, str]:
+    ui_port = port if port is not None else config.ui.port
+    ui_host = host or config.ui.host
+    return ui_port, ui_host
+
+def _poll_explicitly_set(ctx: click.Context, param: click.Option, value: float) -> float:
+    """Mark --poll as explicitly provided so we can warn without --watch."""
+    if ctx.get_parameter_source(param.name) == click.core.ParameterSource.COMMANDLINE:
+        ctx.ensure_object(dict)
+        ctx.obj["poll_explicit"] = True
+    return value
+
+
+def _warn_poll_without_watch(ctx: click.Context, watch_logs: bool) -> None:
+    if ctx.obj and ctx.obj.get("poll_explicit") and not watch_logs:
+        click.echo(
+            "Warning: --poll is ignored unless --watch is also set.", err=True
+        )
+
+def _start_watcher(config: Config, poll: float) -> threading.Thread:
+    watcher_thread: threading.Thread = threading.Thread(
+        target=watch, args=(config,), kwargs={"poll_interval": poll}, daemon=True
+    )
+    watcher_thread.start()
+    click.echo(f"Watching ClaudeCode logs in background (poll={poll}s)...")
+    return watcher_thread
+
+def _launch_streamlit(ui_port: int, ui_host: str) -> None:
+    """Launch the Streamlit dashboard as a subprocess."""
+    try:
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "streamlit",
+                "run",
+                str(Path(__file__).resolve().parent / "ui" / "app.py"),
+                "--server.port",
+                str(ui_port),
+                "--server.address",
+                ui_host,
+                "--server.showEmailPrompt",
+                "false",
+                "--client.toolbarMode",
+                "viewer",
+                "--browser.gatherUsageStats",
+                "false",
+            ],
+            check=True,
+        )
+    except FileNotFoundError as exc:
+        click.echo("Failed to launch Streamlit. Is it installed?", err=True)
+        raise SystemExit(1) from exc
+    except subprocess.CalledProcessError as exc:
+        click.echo(f"Streamlit exited with code {exc.returncode}.", err=True)
+        raise SystemExit(exc.returncode) from exc
 
 
 @click.group()
@@ -76,34 +134,55 @@ def config() -> None:
 @main.command()
 @click.option("--port", default=None, type=int, help="Streamlit port.")
 @click.option("--host", default=None, help="Streamlit host.")
-def ui(port: int | None, host: str | None) -> None:
+@click.option(
+    "--watch",
+    "watch_logs",
+    is_flag=True,
+    help="Also watch for new ClaudeCode logs in the background while the UI runs.",
+)
+@click.option(
+    "--poll",
+    default=5.0,
+    show_default=True,
+    type=float,
+    callback=_poll_explicitly_set,
+    help="Polling interval in seconds for --watch (watchdog fallback).",
+)
+@click.pass_context
+def ui(ctx: click.Context, port: int | None, host: str | None, watch_logs: bool, poll: float) -> None:
     """Launch the Streamlit UI."""
+    _warn_poll_without_watch(ctx, watch_logs)
     config = _config_and_db()
-    ui_port = port if port is not None else config.ui.port
-    ui_host = host or config.ui.host
-    try:
-        subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "streamlit",
-                "run",
-                str(Path(__file__).resolve().parent / "ui" / "app.py"),
-                "--server.port",
-                str(ui_port),
-                "--server.address",
-                ui_host,
-                "--browser.gatherUsageStats",
-                "false",
-            ],
-            check=True,
-        )
-    except FileNotFoundError as exc:
-        click.echo("Failed to launch Streamlit. Is it installed?", err=True)
-        raise SystemExit(1) from exc
-    except subprocess.CalledProcessError as exc:
-        click.echo(f"Streamlit exited with code {exc.returncode}.", err=True)
-        raise SystemExit(exc.returncode) from exc
+    ui_port, ui_host = _resolve_ui_endpoint(config, port, host)
+    if watch_logs:
+        _start_watcher(config, poll)
+    _launch_streamlit(ui_port, ui_host)
+
+
+@main.command()
+@click.option("--port", default=None, type=int, help="Streamlit port.")
+@click.option("--host", default=None, help="Streamlit host.")
+@click.option(
+    "--poll",
+    default=5.0,
+    show_default=True,
+    type=float,
+    help="Polling interval in seconds for the background watcher (watchdog fallback).",
+)
+def start(port: int | None, host: str | None, poll: float) -> None:
+    """Initialize on first run, then launch the UI with background log watching."""
+    config_path = resolve_config_path()
+    first_launch = not config_path.exists()
+    config = _config_and_db()
+    if first_launch:
+        save_config(config, config_path)
+        click.echo(f"Initialized: {config.storage.db_path}")
+        inserted = parse_incremental(config)
+        fill_missing_costs(config)
+        click.echo(f"Inserted {inserted} new records.")
+    ui_port, ui_host = _resolve_ui_endpoint(config, port, host)
+    _start_watcher(config, poll)
+    _launch_streamlit(ui_port, ui_host)
 
 
 @main.command(name="watch")
