@@ -60,7 +60,17 @@ jobs:
 
           MIRROR_REPO_URL="https://x-token-auth@bitbucket.org/${BITBUCKET_WORKSPACE_NAME}/${BITBUCKET_MIRROR_REPOSITORY_NAME}.git"
 
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
           git remote add bitbucket-mirror "${MIRROR_REPO_URL}"
+          
+          # Fetch Bitbucket master and merge it to handle previous deployment commits
+          # Skip merge if remote master does not exist yet (e.g., first push)
+          if git fetch bitbucket-mirror master; then
+            git merge bitbucket-mirror/master --no-edit
+          fi
+          
           git push bitbucket-mirror HEAD:master
           git push bitbucket-mirror "refs/tags/${RELEASE_TAG}"
         if: ${{ steps.release.outputs.release_created }}
