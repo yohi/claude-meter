@@ -28,7 +28,6 @@ jobs:
         if: ${{ steps.release.outputs.release_created }}
         with:
           ref: ${{ steps.release.outputs.tag_name }}
-          fetch-depth: 0
 
       # 2. uv のセットアップとビルド
       - name: Install uv
@@ -39,44 +38,6 @@ jobs:
         if: ${{ steps.release.outputs.release_created }}
 
       # 3. Bitbucket リポジトリのクローン
-      - name: Push to Bitbucket Mirror
-        env:
-          BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
-          RELEASE_TAG: ${{ steps.release.outputs.tag_name }}
-          BITBUCKET_MIRROR_REPOSITORY_NAME: ${{ github.event.repository.name }}
-        run: |
-          set -euo pipefail
-          : "${BITBUCKET_WORKSPACE_NAME:?BITBUCKET_WORKSPACE_NAME is required}"
-          : "${BITBUCKET_MIRROR_REPOSITORY_NAME:?BITBUCKET_MIRROR_REPOSITORY_NAME is required}"
-          if [ -z "${BITBUCKET_API_TOKEN}" ]; then
-            echo "BITBUCKET_API_TOKEN not set" >&2
-            exit 1
-          fi
-
-          ASKPASS_SCRIPT="$(mktemp)"
-          trap 'rm -f "$ASKPASS_SCRIPT"' EXIT
-          printf '#!/bin/sh\necho "$BITBUCKET_API_TOKEN"\n' > "$ASKPASS_SCRIPT"
-          chmod +x "$ASKPASS_SCRIPT"
-          export GIT_ASKPASS="$ASKPASS_SCRIPT"
-
-          MIRROR_REPO_URL="https://x-token-auth@bitbucket.org/${BITBUCKET_WORKSPACE_NAME}/${BITBUCKET_MIRROR_REPOSITORY_NAME}.git"
-
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          git remote add bitbucket-mirror "${MIRROR_REPO_URL}"
-          
-          # Fetch Bitbucket master and merge it to handle previous deployment commits
-          # Skip merge if remote master does not exist yet (e.g., first push)
-          if git fetch bitbucket-mirror master; then
-            git merge bitbucket-mirror/master --allow-unrelated-histories --no-edit -X ours
-          fi
-          
-          git push bitbucket-mirror HEAD:master
-          git push bitbucket-mirror "refs/tags/${RELEASE_TAG}"
-        if: ${{ steps.release.outputs.release_created }}
-
-      # 4. Bitbucket リポジトリのクローン
       - name: Clone Bitbucket Repo
         env:
           BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
@@ -104,7 +65,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
         if: ${{ steps.release.outputs.release_created }}
 
-      # 5. ビルド成果物 (.whl / .tar.gz) をコピーしてプッシュ (パッケージ名はリポジトリ名から動的に決定)
+      # 4. ビルド成果物 (.whl / .tar.gz) およびソースファイルをコピーしてプッシュ
       - name: Copy Packages and Push
         env:
           BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
@@ -114,6 +75,16 @@ jobs:
           : "${BITBUCKET_WORKSPACE_NAME:?BITBUCKET_WORKSPACE_NAME is required}"
           : "${BITBUCKET_REPOSITORY_NAME:?BITBUCKET_REPOSITORY_NAME is required}"
           PACKAGE_NAME="${{ github.event.repository.name }}"
+
+          # 古いソースコードやファイルを削除 (packages と .git 以外)
+          find bitbucket-repo -mindepth 1 -maxdepth 1 -not -name ".git" -not -name "packages" -exec rm -rf {} +
+
+          # ソースコード、設定ファイル、READMEなどをコピー (存在するもののみ)
+          for item in src pyproject.toml README.md LICENSE; do
+            if [ -e "$item" ]; then
+              cp -r "$item" bitbucket-repo/
+            fi
+          done
 
           # コピー先フォルダの作成
           mkdir -p "bitbucket-repo/packages/$PACKAGE_NAME/"
@@ -136,4 +107,8 @@ jobs:
             git commit -m "chore: deploy $PACKAGE_NAME ${RELEASE_TAG} [skip ci]"
             git push origin HEAD
           fi
+
+          # デプロイしたコミットにリリースタグを設定してプッシュ (git+httpsでのタグ付きインストールに対応するため)
+          git tag -f "${RELEASE_TAG}" HEAD
+          git push --force origin "${RELEASE_TAG}"
         if: ${{ steps.release.outputs.release_created }}
