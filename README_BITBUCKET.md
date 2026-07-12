@@ -15,8 +15,8 @@ uv run claude-meter start   # または: uv run cm start
 
 ```bash
 # パッケージ（tar.gz）を指定して実行する場合
-# (0.1.0 を対象のバージョンに、<BITBUCKET_WORKSPACE_NAME> と <BITBUCKET_REPOSITORY_NAME> をご自身のリポジトリ情報に置き換えてください)
-uvx --from https://bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/<BITBUCKET_REPOSITORY_NAME>/raw/master/packages/claude-meter/claude-meter-0.1.0.tar.gz claude-meter start
+# (<VERSION> を対象のバージョンに、<BITBUCKET_WORKSPACE_NAME> と <BITBUCKET_REPOSITORY_NAME> をご自身のリポジトリ情報に置き換えてください)
+uvx --from https://bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/<BITBUCKET_REPOSITORY_NAME>/raw/master/packages/claude-meter/claude-meter-<VERSION>.tar.gz claude-meter start
 
 # Gitリポジトリから直接実行する場合
 # (<BITBUCKET_WORKSPACE_NAME> をご自身のワークスペース名に置き換えてください)

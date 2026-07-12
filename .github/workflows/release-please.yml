@@ -90,6 +90,7 @@ jobs:
           if [ -e README_BITBUCKET.md ]; then
             sed -e "s/<BITBUCKET_WORKSPACE_NAME>/${BITBUCKET_WORKSPACE_NAME}/g" \
                 -e "s/<BITBUCKET_REPOSITORY_NAME>/${BITBUCKET_REPOSITORY_NAME}/g" \
+                -e "s/<VERSION>/${RELEASE_TAG#v}/g" \
                 README_BITBUCKET.md > bitbucket-repo/README.md
           elif [ -e README.md ]; then
             cp README.md bitbucket-repo/
