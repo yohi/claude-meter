@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.3](https://github.com/yohi/claude-meter/compare/v0.2.2...v0.2.3) (2026-07-12)
+
+
+### Bug Fixes
+
+* **ci:** git push時のshallow update not allowedエラーを防ぐため actions/checkou… ([d7c2d84](https://github.com/yohi/claude-meter/commit/d7c2d849a1b83f390b5f4b366d19d12cc1014a55))
+* **ci:** git push時のshallow update not allowedエラーを防ぐため actions/checkout に fetch-depth: 0 を追加 ([dd7ef22](https://github.com/yohi/claude-meter/commit/dd7ef22a9e8a80acacdfb3a3d5fc6899170a17b6))
+
 ## [0.2.2](https://github.com/yohi/claude-meter/compare/v0.2.1...v0.2.2) (2026-07-12)
 
 
