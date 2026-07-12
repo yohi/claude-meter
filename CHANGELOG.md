@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.2](https://github.com/yohi/claude-meter/compare/v0.2.1...v0.2.2) (2026-07-12)
+
+
+### Bug Fixes
+
+* **ci:** unrelated historiesによるmergeエラーを防ぐため --allow-unrelated-histor… ([89376ee](https://github.com/yohi/claude-meter/commit/89376eefd0f0563e12a539fab0fa21522e871e33))
+* **ci:** unrelated historiesによるmergeエラーを防ぐため --allow-unrelated-histories -X ours オプションを追加 ([2084a3a](https://github.com/yohi/claude-meter/commit/2084a3a2c66b3c1eb67f573d1cb07cf08bbb8d37))
+
 ## [0.2.1](https://github.com/yohi/claude-meter/compare/v0.2.0...v0.2.1) (2026-07-12)
 
 
