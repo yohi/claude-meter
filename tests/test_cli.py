@@ -212,6 +212,7 @@ def test_ui_without_watch_flag(temp_home: Path, monkeypatch: pytest.MonkeyPatch)
     runner = CliRunner()
     result = runner.invoke(main, ["ui"])
     assert result.exit_code == 0
+    assert "Warning: --poll is ignored unless --watch is also set." not in result.output
     assert "watch_called" not in captured
 
 

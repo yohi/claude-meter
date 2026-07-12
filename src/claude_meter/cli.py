@@ -28,13 +28,14 @@ def _resolve_ui_endpoint(config: Config, port: int | None, host: str | None) -> 
 
 def _poll_explicitly_set(ctx: click.Context, param: click.Option, value: float) -> float:
     """Mark --poll as explicitly provided so we can warn without --watch."""
-    ctx.ensure_object(dict)
-    ctx.obj["poll_explicit"] = True
+    if ctx.get_parameter_source(param.name) == click.core.ParameterSource.COMMANDLINE:
+        ctx.ensure_object(dict)
+        ctx.obj["poll_explicit"] = True
     return value
 
 
 def _warn_poll_without_watch(ctx: click.Context, watch_logs: bool) -> None:
-    if ctx.obj.get("poll_explicit") and not watch_logs:
+    if ctx.obj and ctx.obj.get("poll_explicit") and not watch_logs:
         click.echo(
             "Warning: --poll is ignored unless --watch is also set.", err=True
         )
