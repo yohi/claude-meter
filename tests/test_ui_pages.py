@@ -2,6 +2,7 @@ from contextlib import closing
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from claude_meter.db import get_connection, init_db
 from claude_meter.ui.session_explorer import (
@@ -66,8 +67,9 @@ def test_text_or_empty() -> None:
 
 
 def test_coerce_float() -> None:
-    assert _coerce_float(1.5) == 1.5
-    assert _coerce_float(2) == 2.0
+    assert _coerce_float(1.5) == pytest.approx(1.5)
+    assert _coerce_float(2) == pytest.approx(2.0)
+    assert _coerce_float(2) == pytest.approx(2.0)
     assert _coerce_float(None) is None
     assert _coerce_float(float("nan")) is None
     assert _coerce_float("x") is None

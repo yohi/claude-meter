@@ -1,5 +1,6 @@
 """Tests for CLI commands."""
 
+from collections.abc import Callable
 from pathlib import Path
 
 import math
@@ -10,6 +11,49 @@ from click.testing import CliRunner
 
 from claude_meter.cli import main
 from claude_meter.models import PricingRecord
+
+
+class _FakeResult:
+    """Stub return value for subprocess.run."""
+
+    returncode = 0
+
+
+def _fake_run(captured: dict[str, object], key: str) -> Callable[..., _FakeResult]:
+    """Return a fake subprocess.run that records the command."""
+
+    def fake_run(cmd: list[str], check: bool = True) -> _FakeResult:
+        captured[key] = cmd
+        return _FakeResult()
+
+    return fake_run
+
+
+def _synced_fake_run(
+    watch_started: threading.Event,
+    captured: dict[str, object],
+    key: str,
+) -> Callable[..., _FakeResult]:
+    """Return a fake_run that waits for the watcher thread before recording."""
+
+    def fake_run(cmd: list[str], check: bool = True) -> _FakeResult:
+        watch_started.wait(timeout=5)
+        captured[key] = cmd
+        return _FakeResult()
+
+    return fake_run
+
+
+def _synced_fake_watch(
+    captured: dict[str, object], watch_started: threading.Event
+) -> Callable[..., None]:
+    """Return a fake_watch that records the call and signals completion."""
+
+    def fake_watch(config: object, poll_interval: float = 5.0) -> None:
+        captured["watch_call"] = (config, poll_interval)
+        watch_started.set()
+
+    return fake_watch
 
 
 def test_init_creates_db(temp_home: Path) -> None:
@@ -84,15 +128,7 @@ def test_ui_initializes_db_before_launch(temp_home: Path, monkeypatch: pytest.Mo
     """`claude-meter ui` を init/collect より先に実行しても、DBスキーマが事前に初期化されていること。"""
     captured: dict[str, list[str]] = {}
 
-    def fake_run(cmd, check=True):
-        captured["cmd"] = cmd
-
-        class _Result:
-            returncode = 0
-
-        return _Result()
-
-    monkeypatch.setattr("claude_meter.cli.subprocess.run", fake_run)
+    monkeypatch.setattr("claude_meter.cli.subprocess.run", _fake_run(captured, "cmd"))
     runner = CliRunner()
     result = runner.invoke(main, ["ui"])
     assert result.exit_code == 0
@@ -125,23 +161,15 @@ def test_watch_command_with_poll_interval(temp_home: Path, monkeypatch: pytest.M
 
 def test_ui_with_watch_flag(temp_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Test `claude-meter ui --watch` starts watcher thread before streamlit."""
-    captured: dict[str, tuple] = {}
+    captured: dict[str, object] = {}
     watch_started = threading.Event()
 
-    def fake_watch(config, poll_interval=5.0):
-        captured["watch_call"] = (config, poll_interval)
-        watch_started.set()
-
-    def fake_run(cmd, check=True):
+    def fake_run(cmd: list[str], check: bool = True) -> _FakeResult:
         watch_started.wait(timeout=5)
         captured["run_called"] = True
+        return _FakeResult()
 
-        class _Result:
-            returncode = 0
-
-        return _Result()
-
-    monkeypatch.setattr("claude_meter.cli.watch", fake_watch)
+    monkeypatch.setattr("claude_meter.cli.watch", _synced_fake_watch(captured, watch_started))
     monkeypatch.setattr("claude_meter.cli.subprocess.run", fake_run)
     runner = CliRunner()
     result = runner.invoke(main, ["ui", "--watch"])
@@ -155,23 +183,13 @@ def test_ui_with_watch_flag(temp_home: Path, monkeypatch: pytest.MonkeyPatch) ->
 
 def test_ui_with_watch_and_custom_poll(temp_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Test `claude-meter ui --watch --poll N` passes custom poll interval to watcher."""
-    captured: dict[str, tuple] = {}
+    captured: dict[str, object] = {}
     watch_started = threading.Event()
 
-    def fake_watch(config, poll_interval=5.0):
-        captured["watch_call"] = (config, poll_interval)
-        watch_started.set()
-
-    def fake_run(cmd, check=True):
-        watch_started.wait(timeout=5)
-
-        class _Result:
-            returncode = 0
-
-        return _Result()
-
-    monkeypatch.setattr("claude_meter.cli.watch", fake_watch)
-    monkeypatch.setattr("claude_meter.cli.subprocess.run", fake_run)
+    monkeypatch.setattr("claude_meter.cli.watch", _synced_fake_watch(captured, watch_started))
+    monkeypatch.setattr(
+        "claude_meter.cli.subprocess.run", _synced_fake_run(watch_started, captured, "ran")
+    )
     runner = CliRunner()
     result = runner.invoke(main, ["ui", "--watch", "--poll", "3.5"])
     assert result.exit_code == 0
@@ -179,6 +197,7 @@ def test_ui_with_watch_and_custom_poll(temp_home: Path, monkeypatch: pytest.Monk
     assert "watch_call" in captured
     _, poll_val = captured["watch_call"]
     assert math.isclose(poll_val, 3.5)
+    assert "ran" in captured
 
 
 def test_ui_without_watch_flag(temp_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -188,15 +207,8 @@ def test_ui_without_watch_flag(temp_home: Path, monkeypatch: pytest.MonkeyPatch)
     def fake_watch(config, poll_interval=5.0):
         captured["watch_called"] = True
 
-    def fake_run(cmd, check=True):
-
-        class _Result:
-            returncode = 0
-
-        return _Result()
-
     monkeypatch.setattr("claude_meter.cli.watch", fake_watch)
-    monkeypatch.setattr("claude_meter.cli.subprocess.run", fake_run)
+    monkeypatch.setattr("claude_meter.cli.subprocess.run", _fake_run(captured, "cmd"))
     runner = CliRunner()
     result = runner.invoke(main, ["ui"])
     assert result.exit_code == 0
@@ -218,23 +230,12 @@ def test_start_first_launch_initializes_and_collects(
         captured["fill_called"] = True
         return 0
 
-    def fake_watch(config, poll_interval=5.0):
-        captured["watch_call"] = (config, poll_interval)
-        watch_started.set()
-
-    def fake_run(cmd, check=True):
-        watch_started.wait(timeout=5)
-        captured["cmd"] = cmd
-
-        class _Result:
-            returncode = 0
-
-        return _Result()
-
     monkeypatch.setattr("claude_meter.cli.parse_incremental", fake_parse_incremental)
     monkeypatch.setattr("claude_meter.cli.fill_missing_costs", fake_fill_missing_costs)
-    monkeypatch.setattr("claude_meter.cli.watch", fake_watch)
-    monkeypatch.setattr("claude_meter.cli.subprocess.run", fake_run)
+    monkeypatch.setattr("claude_meter.cli.watch", _synced_fake_watch(captured, watch_started))
+    monkeypatch.setattr(
+        "claude_meter.cli.subprocess.run", _synced_fake_run(watch_started, captured, "cmd")
+    )
 
     config_path = temp_home / ".claude-meter" / "config.yaml"
     assert not config_path.exists()
@@ -264,23 +265,12 @@ def test_start_second_launch_skips_collect(
         captured["fill_called"] = True
         return 0
 
-    def fake_watch(config, poll_interval=5.0):
-        captured["watch_call"] = (config, poll_interval)
-        watch_started.set()
-
-    def fake_run(cmd, check=True):
-        watch_started.wait(timeout=5)
-        captured["cmd"] = cmd
-
-        class _Result:
-            returncode = 0
-
-        return _Result()
-
     monkeypatch.setattr("claude_meter.cli.parse_incremental", fake_parse_incremental)
     monkeypatch.setattr("claude_meter.cli.fill_missing_costs", fake_fill_missing_costs)
-    monkeypatch.setattr("claude_meter.cli.watch", fake_watch)
-    monkeypatch.setattr("claude_meter.cli.subprocess.run", fake_run)
+    monkeypatch.setattr("claude_meter.cli.watch", _synced_fake_watch(captured, watch_started))
+    monkeypatch.setattr(
+        "claude_meter.cli.subprocess.run", _synced_fake_run(watch_started, captured, "cmd")
+    )
 
     config_dir = temp_home / ".claude-meter"
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -302,18 +292,10 @@ def test_start_launches_streamlit_with_new_flags(
     captured: dict[str, list[str]] = {}
 
     def fake_watch(config, poll_interval=5.0):
-        pass
-
-    def fake_run(cmd, check=True):
-        captured["cmd"] = cmd
-
-        class _Result:
-            returncode = 0
-
-        return _Result()
+        """Watcher is not exercised in this test; only subprocess flags matter."""
 
     monkeypatch.setattr("claude_meter.cli.watch", fake_watch)
-    monkeypatch.setattr("claude_meter.cli.subprocess.run", fake_run)
+    monkeypatch.setattr("claude_meter.cli.subprocess.run", _fake_run(captured, "cmd"))
 
     runner = CliRunner()
     result = runner.invoke(main, ["start"])
@@ -329,15 +311,7 @@ def test_ui_launches_streamlit_with_new_flags(
     """`ui` passes the new Streamlit hardening flags to subprocess.run."""
     captured: dict[str, list[str]] = {}
 
-    def fake_run(cmd, check=True):
-        captured["cmd"] = cmd
-
-        class _Result:
-            returncode = 0
-
-        return _Result()
-
-    monkeypatch.setattr("claude_meter.cli.subprocess.run", fake_run)
+    monkeypatch.setattr("claude_meter.cli.subprocess.run", _fake_run(captured, "cmd"))
     runner = CliRunner()
     result = runner.invoke(main, ["ui"])
     assert result.exit_code == 0
