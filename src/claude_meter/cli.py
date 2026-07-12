@@ -33,7 +33,7 @@ def _poll_explicitly_set(ctx: click.Context, param: click.Option, value: float) 
     return value
 
 
-def _warn_poll_without_watch(ctx: click.Context, watch_logs: bool, poll: float) -> None:
+def _warn_poll_without_watch(ctx: click.Context, watch_logs: bool) -> None:
     if ctx.obj.get("poll_explicit") and not watch_logs:
         click.echo(
             "Warning: --poll is ignored unless --watch is also set.", err=True
@@ -150,7 +150,7 @@ def config() -> None:
 @click.pass_context
 def ui(ctx: click.Context, port: int | None, host: str | None, watch_logs: bool, poll: float) -> None:
     """Launch the Streamlit UI."""
-    _warn_poll_without_watch(ctx, watch_logs, poll)
+    _warn_poll_without_watch(ctx, watch_logs)
     config = _config_and_db()
     ui_port, ui_host = _resolve_ui_endpoint(config, port, host)
     if watch_logs:
