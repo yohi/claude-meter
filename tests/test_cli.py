@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import math
+
 import pytest
 from click.testing import CliRunner
 
@@ -117,7 +119,7 @@ def test_watch_command_with_poll_interval(temp_home: Path, monkeypatch: pytest.M
     assert "Watching ClaudeCode logs for changes (poll=2.5s)..." in result.output
     assert "watch_call" in captured
     _, poll_val = captured["watch_call"]
-    assert poll_val == 2.5
+    assert math.isclose(poll_val, 2.5)
 
 
 def test_ui_with_watch_flag(temp_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -143,7 +145,7 @@ def test_ui_with_watch_flag(temp_home: Path, monkeypatch: pytest.MonkeyPatch) ->
     assert "Watching ClaudeCode logs in background (poll=5.0s)..." in result.output
     assert "watch_call" in captured
     _, poll_val = captured["watch_call"]
-    assert poll_val == 5.0
+    assert math.isclose(poll_val, 5.0)
     assert "run_called" in captured
 
 
@@ -168,7 +170,7 @@ def test_ui_with_watch_and_custom_poll(temp_home: Path, monkeypatch: pytest.Monk
     assert "Watching ClaudeCode logs in background (poll=3.5s)..." in result.output
     assert "watch_call" in captured
     _, poll_val = captured["watch_call"]
-    assert poll_val == 3.5
+    assert math.isclose(poll_val, 3.5)
 
 
 def test_ui_without_watch_flag(temp_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:

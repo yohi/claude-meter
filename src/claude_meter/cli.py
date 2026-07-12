@@ -21,6 +21,19 @@ def _config_and_db() -> Config:
     init_db(config.storage.db_path)
     return config
 
+def _resolve_ui_endpoint(config: Config, port: int | None, host: str | None) -> tuple[int, str]:
+    ui_port = port if port is not None else config.ui.port
+    ui_host = host or config.ui.host
+    return ui_port, ui_host
+
+
+def _start_watcher(config: Config, poll: float) -> threading.Thread:
+    watcher_thread: threading.Thread = threading.Thread(
+        target=watch, args=(config,), kwargs={"poll_interval": poll}, daemon=True
+    )
+    watcher_thread.start()
+    click.echo(f"Watching ClaudeCode logs in background (poll={poll}s)...")
+    return watcher_thread
 
 def _launch_streamlit(ui_port: int, ui_host: str) -> None:
     """Launch the Streamlit dashboard as a subprocess."""
@@ -124,14 +137,9 @@ def config() -> None:
 def ui(port: int | None, host: str | None, watch_logs: bool, poll: float) -> None:
     """Launch the Streamlit UI."""
     config = _config_and_db()
-    ui_port = port if port is not None else config.ui.port
-    ui_host = host or config.ui.host
+    ui_port, ui_host = _resolve_ui_endpoint(config, port, host)
     if watch_logs:
-        watcher_thread: threading.Thread = threading.Thread(
-            target=watch, args=(config,), kwargs={"poll_interval": poll}, daemon=True
-        )
-        watcher_thread.start()
-        click.echo(f"Watching ClaudeCode logs in background (poll={poll}s)...")
+        _start_watcher(config, poll)
     _launch_streamlit(ui_port, ui_host)
 
 
@@ -156,13 +164,8 @@ def start(port: int | None, host: str | None, poll: float) -> None:
         inserted = parse_incremental(config)
         fill_missing_costs(config)
         click.echo(f"Inserted {inserted} new records.")
-    ui_port = port if port is not None else config.ui.port
-    ui_host = host or config.ui.host
-    watcher_thread: threading.Thread = threading.Thread(
-        target=watch, args=(config,), kwargs={"poll_interval": poll}, daemon=True
-    )
-    watcher_thread.start()
-    click.echo(f"Watching ClaudeCode logs in background (poll={poll}s)...")
+    ui_port, ui_host = _resolve_ui_endpoint(config, port, host)
+    _start_watcher(config, poll)
     _launch_streamlit(ui_port, ui_host)
 
 
