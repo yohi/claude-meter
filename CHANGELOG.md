@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.0](https://github.com/yohi/claude-meter/compare/v0.2.3...v0.3.0) (2026-07-12)
+
+
+### Features
+
+* **ci:** GitHubのGit履歴を引き継がず、リリース時のソースコード群とビルド成果物だけをデプロイ用リポジトリにコピーしてコ… ([32e3e59](https://github.com/yohi/claude-meter/commit/32e3e5937593a0de2d93d6eb615e0d5656c419fe))
+* **ci:** GitHubのGit履歴を引き継がず、リリース時のソースコード群とビルド成果物だけをデプロイ用リポジトリにコピーしてコミットするフローに変更 ([9e3b223](https://github.com/yohi/claude-meter/commit/9e3b223a08e3eaf55e0d71af11287a16b65b47ed))
+
+
+### Bug Fixes
+
+* **ci:** Bitbucket側へタグをプッシュする際に強制プッシュするよう --force フラグを追加 ([06a77df](https://github.com/yohi/claude-meter/commit/06a77df4f28e5549054a55434e25eac2b1f6a62e))
+* **ci:** コピー処理の安全性改善、不要なfetch-depthの削除、およびBitbucket側デプロイコミットへのタグプッシュ処理を追加 ([2faf541](https://github.com/yohi/claude-meter/commit/2faf541400f40bf0ad8e2dee4818d0b320dfb5f8))
+
 ## [0.2.3](https://github.com/yohi/claude-meter/compare/v0.2.2...v0.2.3) (2026-07-12)
 
 
