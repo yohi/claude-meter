@@ -17,21 +17,21 @@ jobs:
       BITBUCKET_REPOSITORY_NAME: ${{ vars.BITBUCKET_REPOSITORY_NAME }}
     steps:
       # 1. release-please-action でリリースPR / タグ作成を自動化
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@8b8fd2cc23b2e18957157a9d923d75aa0c6f6ad5 # v4
         id: release
         with:
           release-type: python
           target-branch: master
 
       # ---- 以下、リリースが作成された場合のみ実行 ----
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         if: ${{ steps.release.outputs.release_created }}
         with:
           ref: ${{ steps.release.outputs.tag_name }}
 
       # 2. uv のセットアップとビルド
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         if: ${{ steps.release.outputs.release_created }}
       - name: Build packages
         run: uv build
