@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.2](https://github.com/yohi/claude-meter/compare/v0.3.1...v0.3.2) (2026-07-12)
+
+
+### Bug Fixes
+
+* **ui:** OverviewページのプロジェクトコストチャートでもNULLプロジェクトによるセグフォを防ぐよう修正 ([b10f227](https://github.com/yohi/claude-meter/commit/b10f227114648b029df748da584a6d4825a5c884))
+* **ui:** プロジェクト名が空(NULL)の場合にAltairチャート描画時にセグフォ(SIGSEGV)する問題を修正 ([79bcf23](https://github.com/yohi/claude-meter/commit/79bcf23b4b69d61aa7b8d1746f53241dd72ac0a2))
+* **ui:** プロジェクト名が空(NULL)の場合にProject Breakdownがクラッシュする問題を修正 ([2116e56](https://github.com/yohi/claude-meter/commit/2116e562b08ae6bf98bf381f64d0988405e3a303))
+
+
+### Documentation
+
+* **readme:** README_BITBUCKETにプライベートリポジトリ用のSSH接続コマンドを追記 ([507eda8](https://github.com/yohi/claude-meter/commit/507eda86984400d75918bc609d8b768c062ac2c0))
+* **readme:** README_BITBUCKETにプライベートリポジトリ用のSSH接続コマンドを追記 ([f230a53](https://github.com/yohi/claude-meter/commit/f230a533df813b9eee9247ccb297c5c4bb55f1d8))
+
 ## [0.3.1](https://github.com/yohi/claude-meter/compare/v0.3.0...v0.3.1) (2026-07-12)
 
 
