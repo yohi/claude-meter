@@ -68,7 +68,7 @@ jobs:
           # Fetch Bitbucket master and merge it to handle previous deployment commits
           # Skip merge if remote master does not exist yet (e.g., first push)
           if git fetch bitbucket-mirror master; then
-            git merge bitbucket-mirror/master --no-edit
+            git merge bitbucket-mirror/master --allow-unrelated-histories --no-edit -X ours
           fi
           
           git push bitbucket-mirror HEAD:master
