@@ -3,7 +3,7 @@
 from contextlib import closing
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
 import sqlite3
-from typing import Any
+from typing import Any, TypedDict
 
 import altair as alt
 import pandas as pd
@@ -202,7 +202,7 @@ def _reconciliation_days(label: str) -> int | None:
 
     ``None`` = all time; ``-1`` = custom (caller must supply start/end).
     """
-    return None if label == "Custom" else _RECONCILIATION_PERIOD_DAYS[label]
+    return _RECONCILIATION_PERIOD_DAYS[label]
 
 
 def _reconciliation_breakdown(models: list[ModelRow]) -> pd.DataFrame:
@@ -233,6 +233,32 @@ def _reconciliation_breakdown(models: list[ModelRow]) -> pd.DataFrame:
             "unit_price_per_1k",
             "estimated_cost",
         ],
+    )
+
+class _ReconciliationReportKwargs(TypedDict):
+    config: Config
+    days: int | None
+    start: date | None
+    end: date | None
+    tz_modifiers: list[str] | None
+    actual_total_cost: float | None
+
+
+def _reconciliation_report_kwargs(
+    config: Config,
+    recon_days: int | None,
+    recon_start: date | None,
+    recon_end: date | None,
+    tz_modifiers: list[str] | None,
+    actual_total_cost: float | None,
+) -> _ReconciliationReportKwargs:
+    return _ReconciliationReportKwargs(
+        config=config,
+        days=None if recon_days == -1 else recon_days,
+        start=recon_start,
+        end=recon_end,
+        tz_modifiers=tz_modifiers if recon_days == -1 else None,
+        actual_total_cost=actual_total_cost,
     )
 
 
@@ -364,12 +390,14 @@ def render() -> None:
         )
     try:
         report = _cached_build_report(
-            config,
-            days=recon_days,
-            start=recon_start,
-            end=recon_end,
-            tz_modifiers=tz_modifiers if recon_days == -1 else None,
-            actual_total_cost=actual_total_cost,
+            **_reconciliation_report_kwargs(
+                config,
+                recon_days,
+                recon_start,
+                recon_end,
+                tz_modifiers,
+                actual_total_cost,
+            )
         )
     except Exception as exc:
         st.error(f"Failed to build reconciliation report: {exc}")

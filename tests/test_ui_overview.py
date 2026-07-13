@@ -5,6 +5,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from claude_meter.config import Config
 from claude_meter.db import get_connection, init_db
 from claude_meter.report import ComponentRow, ModelRow
 from claude_meter.ui import overview
@@ -12,6 +13,7 @@ from claude_meter.ui.overview import (
     _daily_cost,
     _reconciliation_breakdown,
     _reconciliation_days,
+    _reconciliation_report_kwargs,
     _summary_for_period,
     _top_costly_prompts,
     _tz_offset_modifiers,
@@ -144,7 +146,7 @@ def test_reconciliation_days_maps_labels() -> None:
     assert _reconciliation_days("Last 7 days") == 7
     assert _reconciliation_days("Last 30 days") == 30
     assert _reconciliation_days("Last 90 days") == 90
-
+    assert _reconciliation_days("Custom") == -1
 
 def test_reconciliation_breakdown_flattens_components() -> None:
     models = [
@@ -205,3 +207,38 @@ def test_reconciliation_breakdown_empty_has_columns() -> None:
         "unit_price_per_1k",
         "estimated_cost",
     ]
+
+
+def test_reconciliation_report_kwargs_translates_custom_days_to_none() -> None:
+    """Custom reconciliation (days == -1) must pass days=None to build_report."""
+    config = Config()
+    kwargs = _reconciliation_report_kwargs(
+        config,
+        recon_days=-1,
+        recon_start=date(2026, 7, 12),
+        recon_end=date(2026, 7, 12),
+        tz_modifiers=["+9 hours"],
+        actual_total_cost=None,
+    )
+    assert kwargs == {
+        "config": config,
+        "days": None,
+        "start": date(2026, 7, 12),
+        "end": date(2026, 7, 12),
+        "tz_modifiers": ["+9 hours"],
+        "actual_total_cost": None,
+    }
+
+
+def test_reconciliation_report_kwargs_preserves_non_custom_days() -> None:
+    config = Config()
+    kwargs = _reconciliation_report_kwargs(
+        config,
+        recon_days=7,
+        recon_start=None,
+        recon_end=None,
+        tz_modifiers=["+9 hours"],
+        actual_total_cost=None,
+    )
+    assert kwargs["days"] == 7
+    assert kwargs["tz_modifiers"] is None
