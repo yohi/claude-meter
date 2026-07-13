@@ -15,6 +15,8 @@ jobs:
     env:
       BITBUCKET_WORKSPACE_NAME: ${{ vars.BITBUCKET_WORKSPACE_NAME }}
       BITBUCKET_REPOSITORY_NAME: ${{ vars.BITBUCKET_REPOSITORY_NAME }}
+      GIT_USER_NAME: ${{ vars.GIT_USER_NAME }}
+      GIT_USER_EMAIL: ${{ vars.GIT_USER_EMAIL }}
     steps:
       # 1. release-please-action でリリースPR / タグ作成を自動化
       - uses: googleapis/release-please-action@8b8fd2cc23b2e18957157a9d923d75aa0c6f6ad5 # v4
@@ -61,8 +63,8 @@ jobs:
           git clone "${REPO_URL}" bitbucket-repo
 
           cd bitbucket-repo
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "${GIT_USER_NAME:-github-actions[bot]}"
+          git config user.email "${GIT_USER_EMAIL:-github-actions[bot]@users.noreply.github.com}"
         if: ${{ steps.release.outputs.release_created }}
 
       # 4. ビルド成果物 (.whl / .tar.gz) およびソースファイルをコピーしてプッシュ
