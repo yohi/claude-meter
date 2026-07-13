@@ -355,7 +355,7 @@ def to_json(report: ReconciliationReport) -> str:
 
 def to_csv(report: ReconciliationReport) -> str:
     buf = io.StringIO()
-    writer = csv.writer(buf)
+    writer = csv.writer(buf, lineterminator="\n")
     writer.writerow(
         ["model", "region", "token_type", "tokens", "unit_price_per_1k", "estimated_cost"]
     )
