@@ -18,6 +18,13 @@ CREATE TABLE IF NOT EXISTS requests (
     output_tokens INTEGER,
     cache_creation_input_tokens INTEGER,
     cache_read_input_tokens INTEGER,
+    cache_creation_5m_tokens INTEGER,
+    cache_creation_1h_tokens INTEGER,
+    web_search_requests INTEGER,
+    web_fetch_requests INTEGER,
+    service_tier TEXT,
+    speed TEXT,
+    inference_geo TEXT,
     response_time_ms INTEGER,
     cost_usd REAL,
     prompt_text TEXT,
@@ -95,6 +102,7 @@ def init_db(db_path: Path) -> None:
     with closing(get_connection(db_path)) as conn:
         conn.executescript(SCHEMA_SQL)
         migrate_sync_state(conn)
+        migrate_requests(conn)
         conn.commit()
 
 
@@ -127,3 +135,46 @@ def migrate_sync_state(conn: sqlite3.Connection) -> None:
         except sqlite3.OperationalError:
             # SQLite < 3.35.0 lacks DROP COLUMN; the unused column is harmless.
             pass
+
+
+
+# Columns added to requests after the initial release (extended per-request usage:
+# 5m/1h cache-write split, server tool use counts, service tier, speed, inference
+# geo). Existing databases created before these columns must be migrated in place
+# (CREATE TABLE IF NOT EXISTS never alters an existing table). A later
+# `collect --reparse` backfills the values for rows ingested before the migration.
+_REQUESTS_EXTENDED_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("cache_creation_5m_tokens", "INTEGER"),
+    ("cache_creation_1h_tokens", "INTEGER"),
+    ("web_search_requests", "INTEGER"),
+    ("web_fetch_requests", "INTEGER"),
+    ("service_tier", "TEXT"),
+    ("speed", "TEXT"),
+    ("inference_geo", "TEXT"),
+)
+
+
+def migrate_requests(conn: sqlite3.Connection) -> None:
+    """Add the extended per-request usage columns to a pre-existing requests table.
+
+    Idempotent: each column is only added when absent, so repeated calls (and fresh
+    databases that already have the columns from SCHEMA_SQL) are no-ops. Existing
+    rows keep NULL in the new columns until a ``collect --reparse`` backfills them.
+
+    Tolerant of concurrent migrations: if another process (e.g. a separately
+    launched ``collect``/``watch``/UI invocation) already added the column between
+    our existence check and our ``ALTER TABLE``, SQLite raises ``OperationalError:
+    duplicate column name``; that specific error is swallowed since the end state
+    is identical to a successful migration. Unrelated ``OperationalError``s (e.g. a
+    genuinely broken schema) are re-raised.
+    """
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(requests)")}
+    for name, decl in _REQUESTS_EXTENDED_COLUMNS:
+        if name not in existing:
+            try:
+                conn.execute(f"ALTER TABLE requests ADD COLUMN {name} {decl}")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc):
+                    raise
+                # Another process already added this column concurrently; the
+                # migration is idempotent by design, so treat this as a no-op.

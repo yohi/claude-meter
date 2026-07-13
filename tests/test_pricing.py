@@ -317,3 +317,66 @@ def test_update_pricing_skips_source_without_arn_style_keys(
 
     result = pricing.update_pricing(config)
     assert result == usable
+
+
+def test_update_pricing_recovers_after_transient_fetch_failure(
+    temp_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for the cache-poisoning bug: a transient external-source failure
+    must not poison the TTL cache. After the failure returns the built-in fallback,
+    a later call (once the source recovers) re-fetches real pricing instead of being
+    locked to the sparse fallback, which had silently dropped cost for models the
+    fallback omits (e.g. opus-4-8)."""
+    from claude_meter import pricing
+    from claude_meter.db import init_db
+
+    config = Config()
+    init_db(config.storage.db_path)
+    # 1) All external sources fail -> built-in fallback is returned. Crucially it
+    #    must NOT be cached (otherwise it would lock out re-fetching for the TTL).
+    monkeypatch.setitem(pricing._FETCHERS_BY_SOURCE, "models_dev", lambda: [])
+    monkeypatch.setitem(pricing._FETCHERS_BY_SOURCE, "aws_bedrock_json", lambda: [])
+    first = pricing.update_pricing(config)
+    assert first
+    assert all(r.source == "built-in" for r in first)
+
+    # 2) models.dev recovers with the full set including opus-4-8. The next call
+    #    must re-fetch it, not return the earlier fallback.
+    real = [
+        PricingRecord(
+            model="anthropic.claude-opus-4-8",
+            region="us-east-1",
+            input_price_per_1k=5.0,
+            source="models_dev",
+        )
+    ]
+    monkeypatch.setitem(pricing._FETCHERS_BY_SOURCE, "models_dev", lambda: real)
+    second = pricing.update_pricing(config)
+
+    assert second == real
+    assert any("opus-4-8" in r.model for r in second)
+
+
+def test_update_pricing_does_not_persist_builtin_fallback_to_cache(
+    temp_home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When every external source fails and no usable cache exists, update_pricing
+    returns the built-in fallback but must NOT write it into the TTL cache, so a
+    later call retries the real sources instead of trusting a poisoned cache."""
+    from claude_meter import pricing
+    from claude_meter.db import init_db
+    from claude_meter.pricing import _cache_path
+
+    config = Config()
+    init_db(config.storage.db_path)
+    monkeypatch.setitem(pricing._FETCHERS_BY_SOURCE, "models_dev", lambda: [])
+    monkeypatch.setitem(pricing._FETCHERS_BY_SOURCE, "aws_bedrock_json", lambda: [])
+
+    result = pricing.update_pricing(config)
+
+    assert result
+    assert all(r.source == "built-in" for r in result)
+    # The sparse fallback must not have been written to the TTL cache.
+    assert not _cache_path().exists()

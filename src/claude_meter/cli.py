@@ -13,6 +13,7 @@ from claude_meter.config import Config, load_config, resolve_config_path, save_c
 from claude_meter.cost import fill_missing_costs
 from claude_meter.db import init_db
 from claude_meter.pricing import update_pricing
+from claude_meter.report import build_report, to_csv, to_json, to_markdown
 from claude_meter.watcher import watch
 
 
@@ -129,6 +130,53 @@ def pricing_update(force: bool) -> None:
 def config() -> None:
     """Print the configuration file path."""
     click.echo(resolve_config_path())
+
+
+@main.command(name="report")
+@click.option(
+    "--days", default=None, type=int, help="Limit to the last N days (default: all time)."
+)
+@click.option(
+    "--format",
+    "output_format",
+    default="markdown",
+    show_default=True,
+    type=click.Choice(["markdown", "csv", "json"]),
+    help="Report output format.",
+)
+@click.option(
+    "--output",
+    "output_path",
+    default=None,
+    type=click.Path(dir_okay=False),
+    help="Write the report to a file instead of stdout.",
+)
+@click.option(
+    "--actual-total",
+    default=None,
+    type=float,
+    help="Actual AWS Bedrock total cost (USD) to compute the delta against the estimate.",
+)
+def report_cmd(
+    days: int | None,
+    output_format: str,
+    output_path: str | None,
+    actual_total: float | None,
+) -> None:
+    """Generate a cost reconciliation report (estimate vs actual Bedrock)."""
+    config = _config_and_db()
+    reconciliation = build_report(config, days=days, actual_total_cost=actual_total)
+    if output_format == "csv":
+        text = to_csv(reconciliation)
+    elif output_format == "json":
+        text = to_json(reconciliation)
+    else:
+        text = to_markdown(reconciliation)
+    if output_path is not None:
+        Path(output_path).write_text(text, encoding="utf-8")
+        click.echo(f"Wrote {output_format} report to {output_path}")
+    else:
+        click.echo(text)
 
 
 @main.command()

@@ -1,22 +1,30 @@
 """Shared pytest fixtures."""
 
 import json
-import tempfile
 from pathlib import Path
 
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _isolated_home(
+    monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+) -> Path:
+    """Isolate HOME/USERPROFILE for every test so no test reads or writes the real
+    ~/.claude-meter (pricing cache, config, database). Keeps the suite hermetic and
+    prevents it from corrupting a developer's real pricing cache."""
+    home = tmp_path_factory.mktemp("home")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    # Windows LOCALAPPDATA is derived from USERPROFILE by default.
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    return home
+
+
 @pytest.fixture
-def temp_home(monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Provide a temporary home directory and set HOME/USERPROFILE."""
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_path = Path(tmp)
-        monkeypatch.setenv("HOME", str(tmp_path))
-        monkeypatch.setenv("USERPROFILE", str(tmp_path))
-        # Windows LOCALAPPDATA is derived from USERPROFILE by default.
-        monkeypatch.delenv("LOCALAPPDATA", raising=False)
-        yield tmp_path
+def temp_home(_isolated_home: Path) -> Path:
+    """The isolated temporary home directory (see _isolated_home)."""
+    return _isolated_home
 
 
 @pytest.fixture

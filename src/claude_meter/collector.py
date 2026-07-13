@@ -343,6 +343,16 @@ def parse_incremental(config: Config, *, reparse: bool = False) -> int:
                             record, by_uuid, pending_prompt_text, max_prompt
                         )
                         response_text = _extract_text_blocks(message.get("content"))[:max_response]
+                    cache_creation = usage.get("cache_creation")
+                    if not isinstance(cache_creation, dict):
+                        cache_creation = {}
+                    server_tool_use = usage.get("server_tool_use")
+                    if not isinstance(server_tool_use, dict):
+                        server_tool_use = {}
+                    cache_5m = cache_creation.get("ephemeral_5m_input_tokens", 0) or 0
+                    cache_1h = cache_creation.get("ephemeral_1h_input_tokens", 0) or 0
+                    web_search = server_tool_use.get("web_search_requests", 0) or 0
+                    web_fetch = server_tool_use.get("web_fetch_requests", 0) or 0
                     if isinstance(uuid, str) and uuid:
                         request_id = uuid
                     else:
@@ -360,6 +370,13 @@ def parse_incremental(config: Config, *, reparse: bool = False) -> int:
                         cache_creation_input_tokens=usage.get("cache_creation_input_tokens", 0)
                         or 0,
                         cache_read_input_tokens=usage.get("cache_read_input_tokens", 0) or 0,
+                        cache_creation_5m_tokens=cache_5m,
+                        cache_creation_1h_tokens=cache_1h,
+                        web_search_requests=web_search,
+                        web_fetch_requests=web_fetch,
+                        service_tier=usage.get("service_tier") or None,
+                        speed=usage.get("speed") or None,
+                        inference_geo=usage.get("inference_geo") or None,
                         response_time_ms=response_time_ms,
                         prompt_text=prompt_text,
                         response_text=response_text,
@@ -389,8 +406,10 @@ def _insert_usage(conn: sqlite3.Connection, rec: UsageRecord) -> bool:
             timestamp, session_id, request_id, project, git_repository,
             model, region, input_tokens, output_tokens, cache_creation_input_tokens,
             cache_read_input_tokens, response_time_ms, cost_usd, prompt_text,
-            response_text, source_file
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            response_text, source_file,
+            cache_creation_5m_tokens, cache_creation_1h_tokens,
+            web_search_requests, web_fetch_requests, service_tier, speed, inference_geo
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id, request_id) DO UPDATE SET
             timestamp=excluded.timestamp,
             project=excluded.project,
@@ -405,7 +424,14 @@ def _insert_usage(conn: sqlite3.Connection, rec: UsageRecord) -> bool:
             response_time_ms=excluded.response_time_ms,
             cost_usd=excluded.cost_usd,
             prompt_text=excluded.prompt_text,
-            response_text=excluded.response_text""",
+            response_text=excluded.response_text,
+            cache_creation_5m_tokens=excluded.cache_creation_5m_tokens,
+            cache_creation_1h_tokens=excluded.cache_creation_1h_tokens,
+            web_search_requests=excluded.web_search_requests,
+            web_fetch_requests=excluded.web_fetch_requests,
+            service_tier=excluded.service_tier,
+            speed=excluded.speed,
+            inference_geo=excluded.inference_geo""",
         (
             rec.timestamp.isoformat(),
             rec.session_id,
@@ -423,6 +449,13 @@ def _insert_usage(conn: sqlite3.Connection, rec: UsageRecord) -> bool:
             rec.prompt_text,
             rec.response_text,
             str(rec.source_file),
+            rec.cache_creation_5m_tokens,
+            rec.cache_creation_1h_tokens,
+            rec.web_search_requests,
+            rec.web_fetch_requests,
+            rec.service_tier,
+            rec.speed,
+            rec.inference_geo,
         ),
     )
     return existing is None

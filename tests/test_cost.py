@@ -444,3 +444,212 @@ def test_calculate_cost_logs_warning_for_unpriced_model(
     assert second is None
     warnings_again = [r for r in caplog.records if model in r.getMessage()]
     assert len(warnings_again) == 0
+
+
+
+def test_calculate_cost_applies_regional_endpoint_factor() -> None:
+    """The regional (geographic) endpoint carries a 10% premium over global; the
+    factor multiplies the whole cost uniformly."""
+    record = UsageRecord(
+        timestamp=datetime.now(timezone.utc),
+        session_id="s",
+        request_id="r",
+        model="claude-sonnet-4-5-20260701",
+        input_tokens=1000,
+        output_tokens=500,
+        cache_read_input_tokens=100,
+        source_file=Path("x"),
+    )
+    pricing = {
+        ("anthropic.claude-sonnet-4-5-20260701-v1:0", "us-east-1"): PricingRecord(
+            model="anthropic.claude-sonnet-4-5-20260701-v1:0",
+            region="us-east-1",
+            input_price_per_1k=0.003,
+            output_price_per_1k=0.015,
+            cache_creation_price_per_1k=0.00375,
+            cache_read_price_per_1k=0.0003,
+        )
+    }
+    global_cost = calculate_cost(record, pricing, "us-east-1", endpoint_factor=1.0)
+    regional_cost = calculate_cost(record, pricing, "us-east-1", endpoint_factor=1.10)
+    assert global_cost is not None
+    assert regional_cost is not None
+    assert regional_cost == pytest.approx(global_cost * 1.10)
+
+
+def test_calculate_cost_prices_1h_cache_write_at_double_input() -> None:
+    """1-hour cache writes are billed at ~2x the base input rate (not published by
+    models.dev, derived from input_price_per_1k); 5-minute writes use the models.dev
+    cache_creation (cache_write) price."""
+    record = UsageRecord(
+        timestamp=datetime.now(timezone.utc),
+        session_id="s",
+        request_id="r",
+        model="claude-sonnet-4-5-20260701",
+        cache_creation_input_tokens=3000,
+        cache_creation_5m_tokens=2000,
+        cache_creation_1h_tokens=1000,
+        source_file=Path("x"),
+    )
+    pricing = {
+        ("anthropic.claude-sonnet-4-5-20260701-v1:0", "us-east-1"): PricingRecord(
+            model="anthropic.claude-sonnet-4-5-20260701-v1:0",
+            region="us-east-1",
+            input_price_per_1k=0.003,
+            output_price_per_1k=0.015,
+            cache_creation_price_per_1k=0.00375,
+            cache_read_price_per_1k=0.0003,
+        )
+    }
+    cost = calculate_cost(record, pricing, "us-east-1")
+    # 5m: 2000 * 0.00375 / 1000 = 0.0075 ; 1h: 1000 * (0.003*2) / 1000 = 0.006
+    assert cost == pytest.approx(0.0075 + 0.006)
+
+
+def test_calculate_cost_legacy_cache_creation_without_breakdown_uses_5m_rate() -> None:
+    """Records ingested before the 5m/1h breakdown was captured have both split
+    columns at 0; the full aggregate is priced at the 5-minute rate (unchanged)."""
+    record = UsageRecord(
+        timestamp=datetime.now(timezone.utc),
+        session_id="s",
+        request_id="r",
+        model="claude-sonnet-4-5-20260701",
+        cache_creation_input_tokens=2000,
+        source_file=Path("x"),
+    )
+    pricing = {
+        ("anthropic.claude-sonnet-4-5-20260701-v1:0", "us-east-1"): PricingRecord(
+            model="anthropic.claude-sonnet-4-5-20260701-v1:0",
+            region="us-east-1",
+            input_price_per_1k=0.003,
+            output_price_per_1k=0.015,
+            cache_creation_price_per_1k=0.00375,
+            cache_read_price_per_1k=0.0003,
+        )
+    }
+    cost = calculate_cost(record, pricing, "us-east-1")
+    # aggregate 2000 priced entirely at the 5-minute rate: 2000 * 0.00375 / 1000
+    assert cost == pytest.approx(0.0075)
+
+
+def test_fill_missing_costs_applies_regional_endpoint_factor(tmp_path: Path) -> None:
+    """When claude.inference_endpoint is 'regional', stored costs carry the 10%
+    premium over the global endpoint price."""
+    from claude_meter.config import Config
+    from claude_meter.cost import fill_missing_costs
+    from claude_meter.db import get_connection, init_db
+    from claude_meter.pricing import _save_cached_pricing, load_fallback_pricing
+
+    config = Config(
+        storage={"db_path": str(tmp_path / "data.db")},
+        claude={"inference_endpoint": "regional"},
+    )
+    init_db(config.storage.db_path)
+    _save_cached_pricing(config, load_fallback_pricing())
+    with get_connection(config.storage.db_path) as conn:
+        conn.execute(
+            "INSERT INTO requests (timestamp, session_id, request_id, model, "
+            "input_tokens, output_tokens) VALUES (?, ?, ?, ?, ?, ?)",
+            ("2026-07-08T10:00:00Z", "s", "r", "claude-sonnet-4-5-20260701", 1000, 500),
+        )
+        conn.commit()
+
+    fill_missing_costs(config)
+
+    with get_connection(config.storage.db_path) as conn:
+        row = conn.execute("SELECT cost_usd FROM requests WHERE id = 1").fetchone()
+    assert row is not None
+    # Global cost = (1000*0.003 + 500*0.015)/1000 = 0.0105; regional = x 1.10
+    assert row["cost_usd"] == pytest.approx(0.0105 * 1.10)
+
+
+def test_calculate_cost_no_invariant_warning_when_5m_matches_derived(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """派生した 5m トークン数と保存済み cache_creation_5m_tokens が一致する場合、
+    5m/1h 不変条件の警告は出ないこと(レガシー全0行・モダン一致行の両方)。"""
+    pricing = {
+        ("anthropic.claude-sonnet-4-5-20260701-v1:0", "us-east-1"): PricingRecord(
+            model="anthropic.claude-sonnet-4-5-20260701-v1:0",
+            region="us-east-1",
+            input_price_per_1k=0.003,
+            output_price_per_1k=0.015,
+            cache_creation_price_per_1k=0.00375,
+            cache_read_price_per_1k=0.0003,
+        )
+    }
+
+    # レガシー行: 5m/1h 列がともに 0(集計のみ)。1h == 0 のため警告対象外。
+    legacy = UsageRecord(
+        timestamp=datetime.now(timezone.utc),
+        session_id="s",
+        request_id="r",
+        model="claude-sonnet-4-5-20260701",
+        cache_creation_input_tokens=2000,
+        source_file=Path("x"),
+    )
+    # モダン行: 5m + 1h == 集計、かつ保存 5m が派生値(2000)に一致。
+    modern = UsageRecord(
+        timestamp=datetime.now(timezone.utc),
+        session_id="s",
+        request_id="r",
+        model="claude-sonnet-4-5-20260701",
+        cache_creation_input_tokens=3000,
+        cache_creation_5m_tokens=2000,
+        cache_creation_1h_tokens=1000,
+        source_file=Path("x"),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="claude_meter.cost"):
+        assert calculate_cost(legacy, pricing, "us-east-1") is not None
+        assert calculate_cost(modern, pricing, "us-east-1") is not None
+    invariant_warnings = [
+        r for r in caplog.records if "5m/1h split invariant" in r.getMessage()
+    ]
+    assert invariant_warnings == []
+
+
+def test_calculate_cost_warns_on_invariant_break_without_changing_cost(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """非レガシー行(1h > 0)で保存 cache_creation_5m_tokens が派生値と食い違う場合、
+    警告を出しつつも、返す cost は派生値(total - 1h)ベースで不変であること
+    (食い違った保存値はコスト計算に一切影響しない)。"""
+    pricing = {
+        ("anthropic.claude-sonnet-4-5-20260701-v1:0", "us-east-1"): PricingRecord(
+            model="anthropic.claude-sonnet-4-5-20260701-v1:0",
+            region="us-east-1",
+            input_price_per_1k=0.003,
+            output_price_per_1k=0.015,
+            cache_creation_price_per_1k=0.00375,
+            cache_read_price_per_1k=0.0003,
+        )
+    }
+    # 集計 3000、1h 1000 → 派生 5m = 2000。保存 5m は 999 で不整合(かつ 1h > 0)。
+    record = UsageRecord(
+        timestamp=datetime.now(timezone.utc),
+        session_id="s",
+        request_id="r",
+        model="claude-sonnet-4-5-20260701",
+        cache_creation_input_tokens=3000,
+        cache_creation_5m_tokens=999,
+        cache_creation_1h_tokens=1000,
+        source_file=Path("x"),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="claude_meter.cost"):
+        cost = calculate_cost(record, pricing, "us-east-1")
+
+    # 不変条件違反の警告が1回出ていること。
+    invariant_warnings = [
+        r for r in caplog.records if "5m/1h split invariant" in r.getMessage()
+    ]
+    assert len(invariant_warnings) == 1
+
+    # cost は派生値(total - 1h = 2000)ベースで、保存 5m=999 の影響を受けない。
+    derived_5m = 3000 - 1000
+    expected = (derived_5m * 0.00375 + 1000 * (0.003 * 2)) / 1000
+    assert cost == pytest.approx(expected)
+    # 保存 5m=999 を使っていた場合の値とは異なることを明示(食い違い値は無影響)。
+    wrong_if_stored_used = (999 * 0.00375 + 1000 * (0.003 * 2)) / 1000
+    assert expected != pytest.approx(wrong_if_stored_used)

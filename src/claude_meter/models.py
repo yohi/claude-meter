@@ -18,6 +18,13 @@ class UsageRecord(BaseModel):
     output_tokens: int = Field(default=0, ge=0)
     cache_creation_input_tokens: int = Field(default=0, ge=0)
     cache_read_input_tokens: int = Field(default=0, ge=0)
+    cache_creation_5m_tokens: int = Field(default=0, ge=0)
+    cache_creation_1h_tokens: int = Field(default=0, ge=0)
+    web_search_requests: int = Field(default=0, ge=0)
+    web_fetch_requests: int = Field(default=0, ge=0)
+    service_tier: str | None = None
+    speed: str | None = None
+    inference_geo: str | None = None
     response_time_ms: int | None = None
     cost_usd: float | None = None
     prompt_text: str | None = None

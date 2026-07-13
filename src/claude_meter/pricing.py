@@ -394,8 +394,10 @@ def update_pricing(config: Config, force: bool = False) -> list[PricingRecord]:
         return effective_records
     fallback = load_fallback_pricing(config)
 
-    _save_cached_pricing(config, fallback)
-
+    # Do not persist the built-in fallback to the TTL cache: caching it with a fresh
+    # timestamp would lock out re-fetching real pricing for the whole TTL window (and
+    # silently drop cost for models it omits, e.g. opus-4-8). It is a bundled offline
+    # resource that is always available without caching.
     effective_records = _apply_pricing_overrides(config, fallback)
 
     upsert_pricing_table(config, effective_records)

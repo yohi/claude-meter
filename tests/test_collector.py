@@ -615,3 +615,98 @@ def test_extract_text_blocks_handles_null_and_non_string_text() -> None:
     # 通常の文字列 text ブロックは変更なく連結される。
     normal_text = [{"type": "text", "text": "ok"}]
     assert _extract_text_blocks(normal_text) == "ok"
+
+
+
+def test_parse_incremental_captures_extended_usage_fields(temp_home: Path) -> None:
+    """cache_creation 5m/1h split, service_tier, speed, server_tool_use, and
+    inference_geo are captured from the assistant usage block."""
+    projects_dir = temp_home / ".claude" / "projects" / "demo"
+    projects_dir.mkdir(parents=True)
+    session_id = "sess-ext"
+    user_record = {
+        "type": "user",
+        "uuid": "u1",
+        "parentUuid": None,
+        "timestamp": "2026-07-08T09:59:58.000Z",
+        "cwd": "/home/user/demo",
+        "sessionId": session_id,
+        "message": {"role": "user", "content": "hi"},
+    }
+    assistant_record = {
+        "type": "assistant",
+        "uuid": "a1",
+        "parentUuid": "u1",
+        "timestamp": "2026-07-08T10:00:00.000Z",
+        "cwd": "/home/user/demo",
+        "sessionId": session_id,
+        "message": {
+            "model": "claude-opus-4-8",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "ok"}],
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 731,
+                "cache_creation_input_tokens": 21288,
+                "cache_read_input_tokens": 25329,
+                "cache_creation": {
+                    "ephemeral_1h_input_tokens": 288,
+                    "ephemeral_5m_input_tokens": 21000,
+                },
+                "server_tool_use": {"web_search_requests": 3, "web_fetch_requests": 1},
+                "service_tier": "standard",
+                "speed": "standard",
+                "inference_geo": "",
+            },
+        },
+    }
+    path = projects_dir / f"{session_id}.jsonl"
+    path.write_text(
+        json.dumps(user_record) + "\n" + json.dumps(assistant_record) + "\n",
+        encoding="utf-8",
+    )
+
+    config = load_config()
+    init_db(config.storage.db_path)
+    parse_incremental(config)
+
+    with closing(get_connection(config.storage.db_path)) as conn:
+        row = conn.execute(
+            "SELECT cache_creation_5m_tokens, cache_creation_1h_tokens, "
+            "web_search_requests, web_fetch_requests, service_tier, speed, "
+            "inference_geo FROM requests WHERE request_id = 'a1'"
+        ).fetchone()
+    assert row is not None
+    assert row["cache_creation_5m_tokens"] == 21000
+    assert row["cache_creation_1h_tokens"] == 288
+    assert row["web_search_requests"] == 3
+    assert row["web_fetch_requests"] == 1
+    assert row["service_tier"] == "standard"
+    assert row["speed"] == "standard"
+    # Empty inference_geo is normalized to NULL.
+    assert row["inference_geo"] is None
+
+
+def test_parse_incremental_defaults_extended_fields_when_absent(
+    temp_home: Path, sample_project_jsonl: Path
+) -> None:
+    """The conftest sample has no cache_creation breakdown / service_tier / speed /
+    server_tool_use, so token/count fields default to 0 and text fields to NULL."""
+    config = load_config()
+    init_db(config.storage.db_path)
+    parse_incremental(config)
+
+    with closing(get_connection(config.storage.db_path)) as conn:
+        row = conn.execute(
+            "SELECT cache_creation_5m_tokens, cache_creation_1h_tokens, "
+            "web_search_requests, web_fetch_requests, service_tier, speed, "
+            "inference_geo FROM requests WHERE request_id = 'a1'"
+        ).fetchone()
+    assert row is not None
+    assert row["cache_creation_5m_tokens"] == 0
+    assert row["cache_creation_1h_tokens"] == 0
+    assert row["web_search_requests"] == 0
+    assert row["web_fetch_requests"] == 0
+    assert row["service_tier"] is None
+    assert row["speed"] is None
+    assert row["inference_geo"] is None
