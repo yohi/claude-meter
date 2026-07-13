@@ -160,8 +160,21 @@ def migrate_requests(conn: sqlite3.Connection) -> None:
     Idempotent: each column is only added when absent, so repeated calls (and fresh
     databases that already have the columns from SCHEMA_SQL) are no-ops. Existing
     rows keep NULL in the new columns until a ``collect --reparse`` backfills them.
+
+    Tolerant of concurrent migrations: if another process (e.g. a separately
+    launched ``collect``/``watch``/UI invocation) already added the column between
+    our existence check and our ``ALTER TABLE``, SQLite raises ``OperationalError:
+    duplicate column name``; that specific error is swallowed since the end state
+    is identical to a successful migration. Unrelated ``OperationalError``s (e.g. a
+    genuinely broken schema) are re-raised.
     """
     existing = {row[1] for row in conn.execute("PRAGMA table_info(requests)")}
     for name, decl in _REQUESTS_EXTENDED_COLUMNS:
         if name not in existing:
-            conn.execute(f"ALTER TABLE requests ADD COLUMN {name} {decl}")
+            try:
+                conn.execute(f"ALTER TABLE requests ADD COLUMN {name} {decl}")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc):
+                    raise
+                # Another process already added this column concurrently; the
+                # migration is idempotent by design, so treat this as a no-op.
