@@ -2,12 +2,16 @@ from contextlib import closing
 from datetime import date, timedelta, timezone
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from claude_meter.db import get_connection, init_db
+from claude_meter.report import ComponentRow, ModelRow
 from claude_meter.ui import overview
 from claude_meter.ui.overview import (
     _daily_cost,
+    _reconciliation_breakdown,
+    _reconciliation_days,
     _summary_for_period,
     _top_costly_prompts,
     _tz_offset_modifiers,
@@ -133,3 +137,71 @@ def test_top_costly_prompts_without_text_is_not_aggregated(tmp_path: Path) -> No
         top = _top_costly_prompts(conn, "2026-07-01", "2026-07-31", show_prompts=False)
         assert list(top.columns) == ["timestamp", "project", "model", "cost_usd"]
         assert len(top) == 2
+
+
+def test_reconciliation_days_maps_labels() -> None:
+    assert _reconciliation_days("All time") is None
+    assert _reconciliation_days("Last 7 days") == 7
+    assert _reconciliation_days("Last 30 days") == 30
+    assert _reconciliation_days("Last 90 days") == 90
+
+
+def test_reconciliation_breakdown_flattens_components() -> None:
+    models = [
+        ModelRow(
+            model="claude-sonnet",
+            region="us-east-1",
+            requests=3,
+            priced=True,
+            estimated_cost=0.5,
+            stored_cost_usd=0.4,
+            components=[
+                ComponentRow("input", 1000, 0.003, 0.003),
+                ComponentRow("output", 500, 0.015, 0.0075),
+            ],
+        ),
+        ModelRow(
+            model="unknown-model",
+            region="us-west-2",
+            requests=1,
+            priced=False,
+            estimated_cost=None,
+            stored_cost_usd=None,
+            components=[ComponentRow("input", 200, None, None)],
+        ),
+    ]
+    df = _reconciliation_breakdown(models)
+    assert list(df.columns) == [
+        "model",
+        "region",
+        "token_type",
+        "tokens",
+        "unit_price_per_1k",
+        "estimated_cost",
+    ]
+    assert len(df) == 3
+    first = df.iloc[0]
+    assert first["model"] == "claude-sonnet"
+    assert first["region"] == "us-east-1"
+    assert first["token_type"] == "input"
+    assert first["tokens"] == 1000
+    assert first["unit_price_per_1k"] == pytest.approx(0.003)
+    assert first["estimated_cost"] == pytest.approx(0.003)
+    unpriced = df[df["model"] == "unknown-model"].iloc[0]
+    assert unpriced["token_type"] == "input"
+    assert unpriced["tokens"] == 200
+    assert pd.isna(unpriced["unit_price_per_1k"])
+    assert pd.isna(unpriced["estimated_cost"])
+
+
+def test_reconciliation_breakdown_empty_has_columns() -> None:
+    df = _reconciliation_breakdown([])
+    assert df.empty
+    assert list(df.columns) == [
+        "model",
+        "region",
+        "token_type",
+        "tokens",
+        "unit_price_per_1k",
+        "estimated_cost",
+    ]

@@ -12,6 +12,13 @@ import streamlit as st
 from claude_meter.db import get_connection
 from claude_meter.config import load_config, resolve_tzinfo
 from claude_meter.model_normalizer import display_model_name
+from claude_meter.report import (
+    ModelRow,
+    build_report,
+    to_csv,
+    to_json,
+    to_markdown,
+)
 
 
 def _summary_for_period(conn: sqlite3.Connection, start: str, end: str) -> dict[str, Any]:
@@ -177,6 +184,54 @@ def _top_costly_prompts(
     return pd.DataFrame(rows, columns=column_names)
 
 
+_RECONCILIATION_PERIOD_DAYS: dict[str, int | None] = {
+    "All time": None,
+    "Last 7 days": 7,
+    "Last 30 days": 30,
+    "Last 90 days": 90,
+}
+
+
+def _reconciliation_days(label: str) -> int | None:
+    """Map a reconciliation period label to build_report's ``days`` argument.
+
+    Kept independent from the top-of-page ``Period`` control: build_report only
+    supports a last-N-days (or all-time) window, not an arbitrary start/end range.
+    """
+    return _RECONCILIATION_PERIOD_DAYS[label]
+
+
+def _reconciliation_breakdown(models: list[ModelRow]) -> pd.DataFrame:
+    """Flatten reconciliation model rows into a per-(model, token-type) table.
+
+    Columns mirror claude_meter.report.to_csv so the on-screen table matches the
+    CSV download.
+    """
+    rows: list[dict[str, Any]] = [
+        {
+            "model": model_row.model,
+            "region": model_row.region,
+            "token_type": component.token_type,
+            "tokens": component.tokens,
+            "unit_price_per_1k": component.unit_price_per_1k,
+            "estimated_cost": component.cost,
+        }
+        for model_row in models
+        for component in model_row.components
+    ]
+    return pd.DataFrame(
+        rows,
+        columns=[
+            "model",
+            "region",
+            "token_type",
+            "tokens",
+            "unit_price_per_1k",
+            "estimated_cost",
+        ],
+    )
+
+
 def render() -> None:
     config = load_config()
     st.title("claude-meter Overview")
@@ -259,3 +314,95 @@ def render() -> None:
                     "prompt_text": st.column_config.TextColumn("prompt_text", width="large"),
                 },
             )
+
+    st.subheader("Reconciliation")
+    recon_label = st.selectbox(
+        "Reconciliation period",
+        list(_RECONCILIATION_PERIOD_DAYS.keys()),
+        key="reconciliation_period",
+    )
+    recon_days = _reconciliation_days(recon_label)
+    compare_actual = st.checkbox("実際のBedrock請求額を入力して比較する")
+    actual_total_cost: float | None = None
+    if compare_actual:
+        actual_total_cost = st.number_input(
+            "Actual Bedrock total (USD)",
+            min_value=0.0,
+            value=0.0,
+            step=0.01,
+            format="%.4f",
+        )
+    try:
+        report = build_report(
+            config, days=recon_days, actual_total_cost=actual_total_cost
+        )
+    except Exception as exc:
+        st.error(f"Failed to build reconciliation report: {exc}")
+        st.stop()
+
+    est_col, stored_col = st.columns(2)
+    est_col.metric("Estimated Total Cost", f"${report.estimated_total_cost:.4f}")
+    stored_col.metric("Stored Total Cost (DB)", f"${report.stored_total_cost:.4f}")
+    if report.actual_total_cost is not None:
+        actual_col, delta_abs_col, delta_pct_col = st.columns(3)
+        actual_col.metric("Actual Bedrock", f"${report.actual_total_cost:.4f}")
+        delta_abs = 0.0 if report.delta_abs is None else report.delta_abs
+        delta_abs_col.metric("Delta ($)", f"${delta_abs:.4f}")
+        delta_pct = "n/a" if report.delta_pct is None else f"{report.delta_pct}%"
+        delta_pct_col.metric("Delta (%)", delta_pct)
+
+    st.write(
+        f"Requests: {report.total_requests} "
+        f"(priced {report.priced_requests}, unpriced {report.unpriced_requests})"
+    )
+
+    if report.unpriced_models:
+        st.warning(f"Unpriced models: {', '.join(report.unpriced_models)}")
+    if len(report.distinct_regions) > 1:
+        st.warning(
+            f"Multiple regions found in data: {', '.join(report.distinct_regions)}"
+        )
+
+    st.caption("Divergence flags")
+    flags_df = pd.DataFrame(
+        {
+            "flag": [
+                "1-hour cache writes present",
+                "Non-standard service-tier requests",
+                "Non-standard speed (fast) requests",
+                "Server web_search requests",
+                "Server web_fetch requests",
+            ],
+            "value": [
+                str(report.cache_1h_present),
+                str(report.non_standard_tier_requests),
+                str(report.non_standard_speed_requests),
+                str(report.web_search_requests),
+                str(report.web_fetch_requests),
+            ],
+        }
+    )
+    st.dataframe(flags_df, use_container_width=True)
+
+    st.caption("Cost by model x token type")
+    st.dataframe(_reconciliation_breakdown(report.models), use_container_width=True)
+
+    csv_col, md_col, json_col = st.columns(3)
+    csv_col.download_button(
+        "Download CSV",
+        data=to_csv(report),
+        file_name="reconciliation_report.csv",
+        mime="text/csv",
+    )
+    md_col.download_button(
+        "Download Markdown",
+        data=to_markdown(report),
+        file_name="reconciliation_report.md",
+        mime="text/markdown",
+    )
+    json_col.download_button(
+        "Download JSON",
+        data=to_json(report),
+        file_name="reconciliation_report.json",
+        mime="application/json",
+    )
