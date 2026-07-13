@@ -1,8 +1,35 @@
 """Configuration editor page."""
 
+import zoneinfo
+
 import streamlit as st
 
 from claude_meter.config import load_config, save_config
+
+_AUTO_DETECT_LABEL = "(auto-detect)"
+
+
+def _timezone_options() -> list[str]:
+    """Return selectbox options: auto-detect sentinel first, then sorted IANA names."""
+    return [_AUTO_DETECT_LABEL, *sorted(zoneinfo.available_timezones())]
+
+
+def _timezone_to_option(name: str | None) -> str:
+    """Map a stored config value (``None`` or IANA name) to a selectbox option."""
+    return _AUTO_DETECT_LABEL if name is None else name
+
+
+def _option_to_timezone(option: str) -> str | None:
+    """Map a selectbox option back to a storable config value."""
+    return None if option == _AUTO_DETECT_LABEL else option
+
+
+def _get_timezone_option_index(option: str, options: list[str]) -> int:
+    """Return the index of option in options, or 0 if not found."""
+    try:
+        return options.index(option)
+    except ValueError:
+        return 0
 
 
 def render() -> None:
@@ -38,6 +65,17 @@ def render() -> None:
             value=config.ui.port,
             step=1,
         )
+        timezone_options = _timezone_options()
+        timezone_option_value = _timezone_to_option(config.ui.timezone)
+        timezone_option = st.selectbox(
+            "UI timezone",
+            options=timezone_options,
+            index=_get_timezone_option_index(timezone_option_value, timezone_options),
+            help=(
+                "Used to bucket daily costs by local day. "
+                f"{_AUTO_DETECT_LABEL} uses the system's local timezone."
+            ),
+        )
         cache_ttl_hours = st.number_input(
             "Pricing cache TTL (hours)",
             min_value=0,
@@ -53,6 +91,7 @@ def render() -> None:
         config.privacy.max_prompt_length = int(max_prompt_length)
         config.ui.host = host
         config.ui.port = int(port)
+        config.ui.timezone = _option_to_timezone(timezone_option)
         config.pricing.cache_ttl_hours = int(cache_ttl_hours)
         try:
             save_config(config)
