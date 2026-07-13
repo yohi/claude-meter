@@ -102,8 +102,31 @@ def calculate_cost(
     # is not published, so it is derived from input_price_per_1k. Records ingested
     # before the 5m/1h breakdown was captured have both split columns at 0, so the
     # whole aggregate falls into the 5-minute bucket (unchanged legacy pricing).
+    #
+    # The 5-minute count is derived as (aggregate - 1h) rather than read from
+    # record.cache_creation_5m_tokens on purpose. This relies on an invariant:
+    # modern rows satisfy 5m + 1h == cache_creation_input_tokens, while legacy rows
+    # have 5m == 0 (and 1h == 0) with all cache-write activity folded into the
+    # aggregate column. Reading cache_creation_5m_tokens directly would under-count
+    # legacy rows, so that field is intentionally left unused by the cost math here.
+    # The invariant is not enforced anywhere else, so the logger.warning below is a
+    # safety net: if a future upstream API change breaks the equality on a non-legacy
+    # row (1h > 0), the mismatch is surfaced instead of silently pricing it wrong.
     cache_1h_tokens = record.cache_creation_1h_tokens
     cache_5m_tokens = max(0, record.cache_creation_input_tokens - cache_1h_tokens)
+    # Legacy rows always have cache_creation_1h_tokens == 0, so only a modern row
+    # (1h > 0) whose stored 5m column disagrees with the derived value signals a
+    # broken invariant. This is purely observational: it never alters the returned
+    # cost (the math continues to use the derived cache_5m_tokens above).
+    if record.cache_creation_1h_tokens > 0 and record.cache_creation_5m_tokens != cache_5m_tokens:
+        logger.warning(
+            "cache_creation_5m_tokens (%d) does not match derived 5m tokens (%d) "
+            "for model=%r; the 5m/1h split invariant "
+            "(5m + 1h == cache_creation_input_tokens) may no longer hold",
+            record.cache_creation_5m_tokens,
+            cache_5m_tokens,
+            record.model,
+        )
     cache_1h_price = (
         None if price.input_price_per_1k is None else price.input_price_per_1k * CACHE_1H_INPUT_MULTIPLIER
     )
