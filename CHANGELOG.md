@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.7.0](https://github.com/yohi/claude-meter/compare/v0.6.0...v0.7.0) (2026-07-13)
+
+
+### Features
+
+* Reconciliationセクションにカスタム日付範囲選択を追加 ([bffbbba](https://github.com/yohi/claude-meter/commit/bffbbbaf012d7b975a79efc0620237b1c904b82d))
+* Reconciliationセクションにカスタム日付範囲選択を追加 ([60edc67](https://github.com/yohi/claude-meter/commit/60edc67387afd280d04d7d87f00f10b03cb94bd1))
+
+
+### Bug Fixes
+
+* Custom 調整期間が days=None で正しく start/end を使うように修正 ([5730f5d](https://github.com/yohi/claude-meter/commit/5730f5d28cbb567fdfc112e406a3abd0ce360516))
+* timedelta の tz_modifiers 引数を正しく解析し符号を修正 ([4d66956](https://github.com/yohi/claude-meter/commit/4d66956aabaef726075bbc6ec1ec89c75b827e99))
+
 ## [0.6.0](https://github.com/yohi/claude-meter/compare/v0.5.0...v0.6.0) (2026-07-13)
 
 
