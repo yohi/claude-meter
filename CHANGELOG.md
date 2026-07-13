@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.0](https://github.com/yohi/claude-meter/compare/v0.3.4...v0.4.0) (2026-07-13)
+
+
+### Features
+
+* セッション選択時にプロジェクト名を表示するよう改善 ([dd44408](https://github.com/yohi/claude-meter/commit/dd4440833c217ec5ab0e34dfb51480d4adaa838d))
+
+
+### Documentation
+
+* Claude Code v2.1.159への互換性についての説明を追記 ([824ca65](https://github.com/yohi/claude-meter/commit/824ca65289dbc3598aac85749cf4a020fc28835b))
+
 ## [0.3.4](https://github.com/yohi/claude-meter/compare/v0.3.3...v0.3.4) (2026-07-12)
 
 
