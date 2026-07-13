@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.6.0](https://github.com/yohi/claude-meter/compare/v0.5.0...v0.6.0) (2026-07-13)
+
+
+### Features
+
+* **ui:** 設定画面にタイムゾーン選択機能を追加 ([48585bb](https://github.com/yohi/claude-meter/commit/48585bbbe305089699e6d103a2b62b34eaa43197))
+
+
+### Bug Fixes
+
+* Windows環境向けにtzdataパッケージの依存を追加 ([05fee64](https://github.com/yohi/claude-meter/commit/05fee64084ce7ed3f1408a2fd4d93df382f4e520))
+* 設定画面のタイムゾーン選択でindex()クラッシュとNone判定の不備を修正 ([8d6031f](https://github.com/yohi/claude-meter/commit/8d6031f38a7c0fdd8922c2eca904ceddda05587d))
+
 ## [0.5.0](https://github.com/yohi/claude-meter/compare/v0.4.0...v0.5.0) (2026-07-13)
 
 
