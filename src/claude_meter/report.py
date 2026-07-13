@@ -232,10 +232,10 @@ def _period_filter(
         # corresponds to start-of-day in the configured UI timezone.
         for modifier in tz_modifiers:
             sign = modifier[0]
-            amount = " ".join(modifier[1:].split()[:2])  # e.g. '5 hours'
-            delta = timedelta(**{amount.replace(" ", "_"): 1})
-            period_from_local += -delta if sign == "-" else delta
-            period_to_local += -delta if sign == "-" else delta
+            n, unit = modifier[1:].split()  # e.g. '9', 'hours'
+            delta = timedelta(**{unit: int(n)})
+            period_from_local += delta if sign == "-" else -delta
+            period_to_local += delta if sign == "-" else -delta
         period_from: datetime | None = period_from_local
         period_to: datetime = period_to_local
         where = "WHERE timestamp >= ? AND timestamp < ?"

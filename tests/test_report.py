@@ -1,6 +1,7 @@
 """Tests for the reconciliation report (claude_meter.report)."""
 
 import json
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -9,8 +10,69 @@ from claude_meter.config import Config
 from claude_meter.db import get_connection, init_db
 from claude_meter.models import PricingRecord
 from claude_meter.pricing import _save_cached_pricing
-from claude_meter.report import build_report, to_csv, to_json, to_markdown
+from claude_meter.report import build_report, to_csv, to_json, to_markdown, _period_filter
 
+
+def test_period_filter_applies_tz_offset_to_custom_range() -> None:
+    """Custom ranges shift local midnight boundaries into UTC via tz_modifiers."""
+    where, params, period_from, period_to = _period_filter(
+        start=date(2026, 7, 12),
+        end=date(2026, 7, 12),
+        tz_modifiers=["+9 hours"],
+    )
+    assert period_from is not None
+    assert period_from.isoformat() == "2026-07-11T15:00:00+00:00"
+    assert period_to.isoformat() == "2026-07-12T15:00:00+00:00"
+
+
+def test_period_filter_applies_negative_tz_offset() -> None:
+    where, params, period_from, period_to = _period_filter(
+        start=date(2026, 7, 12),
+        end=date(2026, 7, 12),
+        tz_modifiers=["-5 hours"],
+    )
+    assert period_from is not None
+    assert period_from.isoformat() == "2026-07-12T05:00:00+00:00"
+    assert period_to.isoformat() == "2026-07-13T05:00:00+00:00"
+
+
+def test_build_report_custom_range_with_tz_offset(temp_home: Path) -> None:
+    """Custom range (days=None, start/end/tz_modifiers) filters to local days."""
+    config = Config()
+    init_db(config.storage.db_path)
+    _save_cached_pricing(config, _sonnet_pricing())
+    with get_connection(config.storage.db_path) as conn:
+        # 2026-07-11T15:00:00Z is midnight on 2026-07-12 in UTC+9.
+        _insert(
+            conn,
+            "timestamp, session_id, request_id, model, input_tokens, output_tokens",
+            ("2026-07-11T15:00:00Z", "s", "r", _SONNET_MODEL, 1000, 500),
+        )
+        # 2026-07-12T14:59:59Z is still 2026-07-11 local in UTC+9.
+        _insert(
+            conn,
+            "timestamp, session_id, request_id, model, input_tokens, output_tokens",
+            ("2026-07-12T14:59:59Z", "s", "r2", _SONNET_MODEL, 100, 50),
+        )
+        # 2026-07-12T15:00:00Z is midnight on 2026-07-13 in UTC+9.
+        _insert(
+            conn,
+            "timestamp, session_id, request_id, model, input_tokens, output_tokens",
+            ("2026-07-12T15:00:00Z", "s", "r3", _SONNET_MODEL, 10, 5),
+        )
+        conn.commit()
+
+    report = build_report(
+        config,
+        days=None,
+        start=date(2026, 7, 12),
+        end=date(2026, 7, 12),
+        tz_modifiers=["+9 hours"],
+    )
+
+    # Only the two records that fall within 2026-07-12 local time are counted.
+    assert report.total_requests == 2
+    assert report.priced_requests == 2
 _SONNET_ARN = "anthropic.claude-sonnet-4-5-20260701-v1:0"
 _SONNET_MODEL = "claude-sonnet-4-5-20260701"
 
