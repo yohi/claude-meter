@@ -328,9 +328,10 @@ def render() -> None:
         actual_total_cost = st.number_input(
             "Actual Bedrock total (USD)",
             min_value=0.0,
-            value=0.0,
+            value=None,
             step=0.01,
             format="%.4f",
+            placeholder="例: 12.3456",
         )
     try:
         report = build_report(
