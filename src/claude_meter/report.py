@@ -378,7 +378,7 @@ def _markdown_actual_section(report: ReconciliationReport) -> list[str]:
     """The 'Actual vs estimate' section, or [] when no actual total was given."""
     if report.actual_total_cost is None:
         return []
-    delta_pct = "n/a" if report.delta_pct is None else f"{report.delta_pct}%"
+    delta_pct = "n/a" if report.delta_pct is None else f"{report.delta_pct:.2f}%"
     delta_abs = 0.0 if report.delta_abs is None else report.delta_abs
     return [
         "",
