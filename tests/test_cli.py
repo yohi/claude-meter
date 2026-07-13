@@ -320,3 +320,66 @@ def test_ui_launches_streamlit_with_new_flags(
     assert cmd[cmd.index("--server.showEmailPrompt") + 1] == "false"
     assert cmd[cmd.index("--client.toolbarMode") + 1] == "viewer"
     assert cmd[cmd.index("--browser.gatherUsageStats") + 1] == "false"
+
+
+
+def _seed_report_data() -> None:
+    """Init the (isolated-home) db, seed pricing offline, and insert one request."""
+    from claude_meter.config import Config
+    from claude_meter.db import get_connection, init_db
+    from claude_meter.pricing import _save_cached_pricing
+
+    config = Config()
+    init_db(config.storage.db_path)
+    _save_cached_pricing(
+        config,
+        [
+            PricingRecord(
+                model="anthropic.claude-sonnet-4-5-20260701-v1:0",
+                region="us-east-1",
+                input_price_per_1k=0.003,
+                output_price_per_1k=0.015,
+                cache_creation_price_per_1k=0.00375,
+                cache_read_price_per_1k=0.0003,
+            )
+        ],
+    )
+    with get_connection(config.storage.db_path) as conn:
+        conn.execute(
+            "INSERT INTO requests (timestamp, session_id, request_id, model, "
+            "input_tokens, output_tokens) VALUES (?, ?, ?, ?, ?, ?)",
+            ("2026-07-08T10:00:00Z", "s", "r", "claude-sonnet-4-5-20260701", 1000, 500),
+        )
+        conn.commit()
+
+
+def test_report_markdown_default(temp_home: Path) -> None:
+    _seed_report_data()
+    runner = CliRunner()
+    result = runner.invoke(main, ["report"])
+    assert result.exit_code == 0
+    assert "claude-meter Reconciliation Report" in result.output
+    assert "Cost by model x token type" in result.output
+
+
+def test_report_json_with_actual_total(temp_home: Path) -> None:
+    import json
+
+    _seed_report_data()
+    runner = CliRunner()
+    result = runner.invoke(main, ["report", "--format", "json", "--actual-total", "1.0"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["actual_total_cost"] == 1.0
+    assert data["delta_abs"] is not None
+    assert isinstance(data["models"], list)
+
+
+def test_report_writes_to_output_file(temp_home: Path, tmp_path: Path) -> None:
+    _seed_report_data()
+    out = tmp_path / "report.csv"
+    runner = CliRunner()
+    result = runner.invoke(main, ["report", "--format", "csv", "--output", str(out)])
+    assert result.exit_code == 0
+    assert out.exists()
+    assert "token_type" in out.read_text(encoding="utf-8")
