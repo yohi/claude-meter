@@ -10,10 +10,11 @@ import pandas as pd
 import streamlit as st
 
 from claude_meter.db import get_connection
-from claude_meter.config import load_config, resolve_tzinfo
+from claude_meter.config import Config, load_config, resolve_tzinfo
 from claude_meter.model_normalizer import display_model_name
 from claude_meter.report import (
     ModelRow,
+    ReconciliationReport,
     build_report,
     to_csv,
     to_json,
@@ -184,10 +185,13 @@ def _top_costly_prompts(
     return pd.DataFrame(rows, columns=column_names)
 
 
+_LABEL_LAST_7_DAYS = "Last 7 days"
+_LABEL_LAST_30_DAYS = "Last 30 days"
+
 _RECONCILIATION_PERIOD_DAYS: dict[str, int | None] = {
     "All time": None,
-    "Last 7 days": 7,
-    "Last 30 days": 30,
+    _LABEL_LAST_7_DAYS: 7,
+    _LABEL_LAST_30_DAYS: 30,
     "Last 90 days": 90,
 }
 
@@ -232,20 +236,27 @@ def _reconciliation_breakdown(models: list[ModelRow]) -> pd.DataFrame:
     )
 
 
+@st.cache_data(ttl=30, show_spinner=False)
+def _cached_build_report(
+    config: Config, days: int | None, actual_total_cost: float | None
+) -> ReconciliationReport:
+    return build_report(config, days=days, actual_total_cost=actual_total_cost)
+
+
 def render() -> None:
     config = load_config()
     st.title("claude-meter Overview")
-    period = st.selectbox("Period", ["Today", "Last 7 days", "Last 30 days", "Custom"])
+    period = st.selectbox("Period", ["Today", _LABEL_LAST_7_DAYS, _LABEL_LAST_30_DAYS, "Custom"])
     resolved_tz = resolve_tzinfo(config.ui.timezone)
     tz_modifiers = _tz_offset_modifiers(resolved_tz)
     today = datetime.now(resolved_tz).date()
     if period == "Today":
         start_day = today
         end_day = today + timedelta(days=1)
-    elif period == "Last 7 days":
+    elif period == _LABEL_LAST_7_DAYS:
         start_day = today - timedelta(days=6)
         end_day = today + timedelta(days=1)
-    elif period == "Last 30 days":
+    elif period == _LABEL_LAST_30_DAYS:
         start_day = today - timedelta(days=29)
         end_day = today + timedelta(days=1)
     else:
@@ -334,7 +345,7 @@ def render() -> None:
             placeholder="例: 12.3456",
         )
     try:
-        report = build_report(
+        report = _cached_build_report(
             config, days=recon_days, actual_total_cost=actual_total_cost
         )
     except Exception as exc:
