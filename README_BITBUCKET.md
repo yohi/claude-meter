@@ -14,10 +14,6 @@ uv run claude-meter start   # または: uv run cm start
 ### `uvx` を使用する場合（Bitbucketリポジトリから直接実行）
 
 ```bash
-# パッケージ（tar.gz）を指定して実行する場合
-# (<VERSION> を対象のバージョンに、<BITBUCKET_WORKSPACE_NAME> と <BITBUCKET_REPOSITORY_NAME> をご自身のリポジトリ情報に置き換えてください)
-uvx --from https://bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/<BITBUCKET_REPOSITORY_NAME>/raw/master/packages/claude-meter/claude-meter-<VERSION>.tar.gz claude-meter start
-
 # Gitリポジトリから直接実行する場合
 # ※プライベートリポジトリの場合は、SSH接続（git+ssh://）を使用するか、HTTPS URLに認証情報（Appパスワードなど）を含めてください。
 
@@ -48,6 +44,18 @@ claude-meter ui
 プロジェクト名は、各JSONLレコードの `cwd` （`.git/config` またはディレクトリ名）から自動で判別されます。デフォルトのClaudeデータディレクトリにある `history.jsonl` （macOS/Linuxでは `~/.claude/history.jsonl`、Windowsでは `%LOCALAPPDATA%\Claude\history.jsonl`）は、プロジェクトの表示名を補正するためのヒントとして任意で参照されます。この履歴データが存在しない場合でも、収集処理が妨げられることはありません。
 
 `uuid` が存在しないレコードには、決定論的な合成ID（synthetic ID）が割り当てられるため、`(session_id, request_id)` のユニーク制約が維持されます。
+
+## 動作確認済みバージョン
+
+本ツールは **Claude Code v2.1.159** での動作を確認しています。Claude Codeは利用履歴を
+`~/.claude/projects/` 以下（Windowsでは対応するディレクトリ）にJSONLファイルとして保存しますが、
+そのレコードのスキーマ（フィールド名、階層構造、`message.content` のブロック種別など）は
+Claude Code内部の実装詳細であり、バージョンアップによって変更されないことは保証されていません。
+
+Claude CodeがJSONLの構造を変更するバージョンにアップグレードされた場合、`claude-meter` が
+レコードを正しく解析できなくなったり、一部フィールドが欠落したり、データ収集が完全に停止したり
+する可能性があります。Claude Codeをアップグレードした後に収集が突然動作しなくなった場合は、
+JSONL形式が変更されていないか確認し、必要に応じて開発者に報告してください。
 
 ## 主な機能
 

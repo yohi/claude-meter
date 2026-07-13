@@ -53,6 +53,20 @@ for project display names; missing history data never blocks collection.
 Records without a `uuid` are assigned a deterministic synthetic ID so the
 `(session_id, request_id)` uniqueness constraint remains valid.
 
+## Compatibility
+
+This tool has been verified to work with **Claude Code v2.1.159**. Claude Code
+stores its usage history as JSONL files under `~/.claude/projects/` (or the
+Windows equivalent), and the exact record schema (field names, nesting,
+`message.content` block types, etc.) is an internal implementation detail that
+is not guaranteed to stay stable across Claude Code releases.
+
+If Claude Code is upgraded to a version that changes this JSONL structure,
+`claude-meter` may fail to parse records correctly, silently drop fields, or
+stop collecting data entirely. If collection suddenly breaks after upgrading
+Claude Code, check whether the JSONL format has changed and open an issue if
+so.
+
 ## What it does
 
 - Parses ClaudeCode JSONL logs from the configured projects directory
