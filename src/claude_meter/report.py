@@ -78,6 +78,7 @@ class ReconciliationReport:
     estimated_total_cost: float
     stored_total_cost: float
     unpriced_models: list[str]
+    distinct_regions: list[str]
     cache_1h_present: bool
     non_standard_tier_requests: int
     non_standard_speed_requests: int
@@ -156,13 +157,21 @@ def _build_components(
 
 def _model_row(
     row: sqlite3.Row,
-    region: str,
+    default_region: str,
     pricing: dict[tuple[str, str], PricingRecord],
     canonical_index: dict[tuple[str, str], PricingRecord],
     factor: float,
 ) -> ModelRow:
+    """Build one ModelRow from a grouped (model, region) aggregate.
+
+    The aggregate carries its own ``region`` (see ``_fetch_rows``'s
+    ``GROUP BY model, region``); a NULL region falls back to ``default_region``
+    (the configured default), mirroring ``cost.fill_missing_costs``. That
+    effective region is used both to resolve pricing and on the returned row.
+    """
     model = str(row["model"])
-    price = price_for_model(model, region, pricing, canonical_index)
+    effective_region = str(row["region"]) if row["region"] is not None else default_region
+    price = price_for_model(model, effective_region, pricing, canonical_index)
     cache_1h = int(row["cw1h"] or 0)
     cache_5m = max(0, int(row["cw"] or 0) - cache_1h)
     unit_input, unit_output, unit_5m, unit_1h, unit_read = _unit_prices(price)
@@ -179,7 +188,7 @@ def _model_row(
     stored = row["stored_cost"]
     return ModelRow(
         model=model,
-        region=region,
+        region=effective_region,
         requests=int(row["requests"] or 0),
         priced=estimated is not None,
         estimated_cost=None if estimated is None else round(estimated, 6),
@@ -201,9 +210,18 @@ def _period_filter(days: int | None) -> tuple[str, tuple[str, ...], datetime | N
 def _fetch_rows(
     conn: sqlite3.Connection, where: str, params: tuple[str, ...]
 ) -> tuple[list[sqlite3.Row], sqlite3.Row]:
-    """Fetch the per-model token/cost aggregates and the overall totals row."""
+    """Fetch the per-(model, region) token/cost aggregates and the overall totals row.
+
+    The per-model aggregate is grouped by both ``model`` and the nullable
+    ``region`` column, so requests recorded under different regions for the same
+    model stay in separate rows (each later priced against its own region; a
+    NULL region is resolved to the configured default in ``_model_row``). The
+    ``totals`` row is intentionally left model/region-agnostic for overall
+    coverage counts.
+    """
     model_rows_raw = conn.execute(
         f"""SELECT model,
+               region,
                COUNT(*) AS requests,
                SUM(COALESCE(input_tokens, 0)) AS inp,
                SUM(COALESCE(output_tokens, 0)) AS outp,
@@ -212,7 +230,7 @@ def _fetch_rows(
                SUM(COALESCE(cache_read_input_tokens, 0)) AS cr,
                SUM(cost_usd) AS stored_cost
            FROM requests {where}
-           GROUP BY model""",
+           GROUP BY model, region""",
         params,
     ).fetchall()
     totals = conn.execute(
@@ -237,7 +255,7 @@ def _fetch_rows(
 
 def _aggregate_models(
     model_rows_raw: list[sqlite3.Row],
-    region: str,
+    default_region: str,
     pricing: dict[tuple[str, str], PricingRecord],
     canonical_index: dict[tuple[str, str], PricingRecord],
     factor: float,
@@ -249,7 +267,7 @@ def _aggregate_models(
     priced_requests = 0
     unpriced_models: list[str] = []
     for raw in model_rows_raw:
-        model_row = _model_row(raw, region, pricing, canonical_index, factor)
+        model_row = _model_row(raw, default_region, pricing, canonical_index, factor)
         models.append(model_row)
         if model_row.estimated_cost is not None:
             estimated_total += model_row.estimated_cost
@@ -301,6 +319,7 @@ def build_report(
     models, estimated_total, priced_requests, unpriced_models = _aggregate_models(
         model_rows_raw, region, pricing, canonical_index, factor
     )
+    distinct_regions = sorted({model_row.region for model_row in models})
     total_requests = int(totals["total"] or 0)
 
     report = ReconciliationReport(
@@ -318,6 +337,7 @@ def build_report(
         estimated_total_cost=estimated_total,
         stored_total_cost=round(float(totals["stored_total"] or 0.0), 6),
         unpriced_models=unpriced_models,
+        distinct_regions=distinct_regions,
         cache_1h_present=int(totals["cw1h_total"] or 0) > 0,
         non_standard_tier_requests=int(totals["nonstd_tier"] or 0),
         non_standard_speed_requests=int(totals["nonstd_speed"] or 0),
@@ -388,14 +408,22 @@ def _markdown_component_rows(report: ReconciliationReport) -> list[str]:
 
 
 def to_markdown(report: ReconciliationReport) -> str:
+    pricing_source = report.pricing_source or "n/a"
+    pricing_updated_at = report.pricing_updated_at or "n/a"
     lines: list[str] = [
         "# claude-meter Reconciliation Report",
         "",
         f"- Generated: {report.generated_at}",
         f"- Period: {report.period_from or 'all'} .. {report.period_to}",
         f"- Region (assumed): {report.region}",
+    ]
+    if len(report.distinct_regions) > 1:
+        lines.append(
+            f"- WARNING multiple regions found in data: {', '.join(report.distinct_regions)}"
+        )
+    lines += [
         f"- Inference endpoint: {report.inference_endpoint} (factor x{report.endpoint_factor})",
-        f"- Pricing source: {report.pricing_source} (updated {report.pricing_updated_at})",
+        f"- Pricing source: {pricing_source} (updated {pricing_updated_at})",
         "",
         "## Coverage",
         "",
