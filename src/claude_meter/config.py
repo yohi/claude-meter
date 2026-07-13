@@ -15,6 +15,7 @@ class _ClaudeConfig(BaseModel):
     projects_dir: Path | None = Field(default=None)
     transcripts_dir: Path | None = Field(default=None)
     region: str = Field(default="us-east-1")
+    inference_endpoint: Literal["global", "regional"] = Field(default="global")
 
 
 class _StorageConfig(BaseModel):

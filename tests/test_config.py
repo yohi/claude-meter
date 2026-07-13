@@ -48,3 +48,9 @@ def test_resolve_tzinfo_none_falls_back_to_detected(monkeypatch: pytest.MonkeyPa
 def test_resolve_tzinfo_invalid_name_returns_tzinfo() -> None:
     resolved = resolve_tzinfo("Definitely/NotAZone")
     assert isinstance(resolved, tzinfo)
+
+
+
+def test_load_config_default_inference_endpoint(temp_home: Path) -> None:
+    config = load_config()
+    assert config.claude.inference_endpoint == "global"

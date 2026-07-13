@@ -22,34 +22,57 @@ logger = logging.getLogger(__name__)
 _logged_unpriced_models: set[str] = set()
 
 
+# Regional (geographic/CRIS) inference endpoints carry a ~10% premium over the
+# global endpoint on Bedrock, applied to every token type. The matched pricing is
+# the global/base rate, so a regional deployment multiplies the whole cost.
+_ENDPOINT_FACTORS: dict[str, float] = {"global": 1.0, "regional": 1.10}
+
+
+# 1-hour cache writes are billed at ~2x the base input rate on Bedrock/Anthropic.
+# The 1h rate is not published by models.dev, so it is derived from input pricing.
+CACHE_1H_INPUT_MULTIPLIER = 2.0
+
+
+def endpoint_cost_factor(endpoint: str) -> float:
+    """Return the cost multiplier for an inference endpoint type (default global)."""
+    return _ENDPOINT_FACTORS.get(endpoint, 1.0)
+
+
+def price_for_model(
+    model: str,
+    region: str,
+    pricing: dict[tuple[str, str], PricingRecord],
+    canonical_index: dict[tuple[str, str], PricingRecord] | None = None,
+) -> PricingRecord | None:
+    """Resolve the PricingRecord for a model+region.
+
+    Tries the normalized ARN-style keys first, then a prefix/version-stripped
+    canonical fallback (matching how models.dev region-prefixed ids reduce to a
+    bare ARN key). Returns None when the model is unknown or absent from pricing.
+    """
+    normalized = normalize_model_name(model)
+    if normalized is None:
+        return None
+    for key in model_to_arn_keys(normalized):
+        price = pricing.get((key, region))
+        if price is not None:
+            return price
+    index = (
+        canonical_index
+        if canonical_index is not None
+        else build_canonical_pricing_index(pricing)
+    )
+    return index.get((canonical_model_key(model), region))
+
+
 def calculate_cost(
     record: UsageRecord,
     pricing: dict[tuple[str, str], PricingRecord],
     region: str,
     canonical_index: dict[tuple[str, str], PricingRecord] | None = None,
+    endpoint_factor: float = 1.0,
 ) -> float | None:
-    normalized = normalize_model_name(record.model)
-    if normalized is None:
-        return None
-    keys = model_to_arn_keys(normalized)
-    price: PricingRecord | None = None
-    for key in keys:
-        price = pricing.get((key, region))
-        if price is not None:
-            break
-    if price is None:
-        # Canonical fallback: exact ARN keys can miss when pricing comes from
-        # models.dev (region-prefixed ids like "eu.anthropic.claude-...") or when
-        # the model is absent from the built-in whitelist. Match on a
-        # prefix/version-stripped core key within the same region using a
-        # precomputed (canonical_key, region) -> PricingRecord index (O(1))
-        # instead of scanning the whole pricing dict per call.
-        index = (
-            canonical_index
-            if canonical_index is not None
-            else build_canonical_pricing_index(pricing)
-        )
-        price = index.get((canonical_model_key(record.model), region))
+    price = price_for_model(record.model, region, pricing, canonical_index)
     if price is None:
         if record.model not in _logged_unpriced_models:
             _logged_unpriced_models.add(record.model)
@@ -59,7 +82,7 @@ def calculate_cost(
                 "name, or a legitimate model missing from the pricing cache.",
                 record.model,
                 region,
-                normalized,
+                normalize_model_name(record.model),
             )
         return None
 
@@ -74,18 +97,29 @@ def calculate_cost(
 
     input_cost = _component(record.input_tokens, price.input_price_per_1k)
     output_cost = _component(record.output_tokens, price.output_price_per_1k)
-    cache_creation_cost = _component(
-        record.cache_creation_input_tokens, price.cache_creation_price_per_1k
+    # Cache-write cost splits by TTL. models.dev's cache_creation (cache_write)
+    # price is the 5-minute rate (1.25x base input); the 1-hour rate (2x base input)
+    # is not published, so it is derived from input_price_per_1k. Records ingested
+    # before the 5m/1h breakdown was captured have both split columns at 0, so the
+    # whole aggregate falls into the 5-minute bucket (unchanged legacy pricing).
+    cache_1h_tokens = record.cache_creation_1h_tokens
+    cache_5m_tokens = max(0, record.cache_creation_input_tokens - cache_1h_tokens)
+    cache_1h_price = (
+        None if price.input_price_per_1k is None else price.input_price_per_1k * CACHE_1H_INPUT_MULTIPLIER
     )
+    cache_5m_cost = _component(cache_5m_tokens, price.cache_creation_price_per_1k)
+    cache_1h_cost = _component(cache_1h_tokens, cache_1h_price)
     cache_read_cost = _component(record.cache_read_input_tokens, price.cache_read_price_per_1k)
     if (
         input_cost is None
         or output_cost is None
-        or cache_creation_cost is None
+        or cache_5m_cost is None
+        or cache_1h_cost is None
         or cache_read_cost is None
     ):
         return None
-    return input_cost + output_cost + cache_creation_cost + cache_read_cost
+    subtotal = input_cost + output_cost + cache_5m_cost + cache_1h_cost + cache_read_cost
+    return subtotal * endpoint_factor
 
 
 def build_canonical_pricing_index(
@@ -132,11 +166,13 @@ def fill_missing_costs(config: Config, region: str | None = None) -> int:
     target_region = region or config.claude.region
     pricing = _load_pricing_map(config)
     canonical_index = build_canonical_pricing_index(pricing)
+    endpoint_factor = _ENDPOINT_FACTORS.get(config.claude.inference_endpoint, 1.0)
     updated = 0
     with get_connection(config.storage.db_path) as conn:
         cursor = conn.execute(
             "SELECT id, model, region, cost_usd, input_tokens, output_tokens, "
-            "cache_creation_input_tokens, cache_read_input_tokens "
+            "cache_creation_input_tokens, cache_creation_5m_tokens, "
+            "cache_creation_1h_tokens, cache_read_input_tokens "
             "FROM requests WHERE cost_usd IS NULL OR region IS NULL"
         )
         rows = cursor.fetchall()
@@ -150,10 +186,12 @@ def fill_missing_costs(config: Config, region: str | None = None) -> int:
                 input_tokens=row["input_tokens"] or 0,
                 output_tokens=row["output_tokens"] or 0,
                 cache_creation_input_tokens=row["cache_creation_input_tokens"] or 0,
+                cache_creation_5m_tokens=row["cache_creation_5m_tokens"] or 0,
+                cache_creation_1h_tokens=row["cache_creation_1h_tokens"] or 0,
                 cache_read_input_tokens=row["cache_read_input_tokens"] or 0,
                 source_file=Path("."),
             )
-            cost = calculate_cost(record, pricing, row_region, canonical_index)
+            cost = calculate_cost(record, pricing, row_region, canonical_index, endpoint_factor)
             cost_missing = row["cost_usd"] is None
             if row["region"] is None:
                 if cost_missing and cost is not None:

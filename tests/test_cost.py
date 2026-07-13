@@ -444,3 +444,120 @@ def test_calculate_cost_logs_warning_for_unpriced_model(
     assert second is None
     warnings_again = [r for r in caplog.records if model in r.getMessage()]
     assert len(warnings_again) == 0
+
+
+
+def test_calculate_cost_applies_regional_endpoint_factor() -> None:
+    """The regional (geographic) endpoint carries a 10% premium over global; the
+    factor multiplies the whole cost uniformly."""
+    record = UsageRecord(
+        timestamp=datetime.now(timezone.utc),
+        session_id="s",
+        request_id="r",
+        model="claude-sonnet-4-5-20260701",
+        input_tokens=1000,
+        output_tokens=500,
+        cache_read_input_tokens=100,
+        source_file=Path("x"),
+    )
+    pricing = {
+        ("anthropic.claude-sonnet-4-5-20260701-v1:0", "us-east-1"): PricingRecord(
+            model="anthropic.claude-sonnet-4-5-20260701-v1:0",
+            region="us-east-1",
+            input_price_per_1k=0.003,
+            output_price_per_1k=0.015,
+            cache_creation_price_per_1k=0.00375,
+            cache_read_price_per_1k=0.0003,
+        )
+    }
+    global_cost = calculate_cost(record, pricing, "us-east-1", endpoint_factor=1.0)
+    regional_cost = calculate_cost(record, pricing, "us-east-1", endpoint_factor=1.10)
+    assert global_cost is not None
+    assert regional_cost is not None
+    assert regional_cost == pytest.approx(global_cost * 1.10)
+
+
+def test_calculate_cost_prices_1h_cache_write_at_double_input() -> None:
+    """1-hour cache writes are billed at ~2x the base input rate (not published by
+    models.dev, derived from input_price_per_1k); 5-minute writes use the models.dev
+    cache_creation (cache_write) price."""
+    record = UsageRecord(
+        timestamp=datetime.now(timezone.utc),
+        session_id="s",
+        request_id="r",
+        model="claude-sonnet-4-5-20260701",
+        cache_creation_input_tokens=3000,
+        cache_creation_5m_tokens=2000,
+        cache_creation_1h_tokens=1000,
+        source_file=Path("x"),
+    )
+    pricing = {
+        ("anthropic.claude-sonnet-4-5-20260701-v1:0", "us-east-1"): PricingRecord(
+            model="anthropic.claude-sonnet-4-5-20260701-v1:0",
+            region="us-east-1",
+            input_price_per_1k=0.003,
+            output_price_per_1k=0.015,
+            cache_creation_price_per_1k=0.00375,
+            cache_read_price_per_1k=0.0003,
+        )
+    }
+    cost = calculate_cost(record, pricing, "us-east-1")
+    # 5m: 2000 * 0.00375 / 1000 = 0.0075 ; 1h: 1000 * (0.003*2) / 1000 = 0.006
+    assert cost == pytest.approx(0.0075 + 0.006)
+
+
+def test_calculate_cost_legacy_cache_creation_without_breakdown_uses_5m_rate() -> None:
+    """Records ingested before the 5m/1h breakdown was captured have both split
+    columns at 0; the full aggregate is priced at the 5-minute rate (unchanged)."""
+    record = UsageRecord(
+        timestamp=datetime.now(timezone.utc),
+        session_id="s",
+        request_id="r",
+        model="claude-sonnet-4-5-20260701",
+        cache_creation_input_tokens=2000,
+        source_file=Path("x"),
+    )
+    pricing = {
+        ("anthropic.claude-sonnet-4-5-20260701-v1:0", "us-east-1"): PricingRecord(
+            model="anthropic.claude-sonnet-4-5-20260701-v1:0",
+            region="us-east-1",
+            input_price_per_1k=0.003,
+            output_price_per_1k=0.015,
+            cache_creation_price_per_1k=0.00375,
+            cache_read_price_per_1k=0.0003,
+        )
+    }
+    cost = calculate_cost(record, pricing, "us-east-1")
+    # aggregate 2000 priced entirely at the 5-minute rate: 2000 * 0.00375 / 1000
+    assert cost == pytest.approx(0.0075)
+
+
+def test_fill_missing_costs_applies_regional_endpoint_factor(tmp_path: Path) -> None:
+    """When claude.inference_endpoint is 'regional', stored costs carry the 10%
+    premium over the global endpoint price."""
+    from claude_meter.config import Config
+    from claude_meter.cost import fill_missing_costs
+    from claude_meter.db import get_connection, init_db
+    from claude_meter.pricing import _save_cached_pricing, load_fallback_pricing
+
+    config = Config(
+        storage={"db_path": str(tmp_path / "data.db")},
+        claude={"inference_endpoint": "regional"},
+    )
+    init_db(config.storage.db_path)
+    _save_cached_pricing(config, load_fallback_pricing())
+    with get_connection(config.storage.db_path) as conn:
+        conn.execute(
+            "INSERT INTO requests (timestamp, session_id, request_id, model, "
+            "input_tokens, output_tokens) VALUES (?, ?, ?, ?, ?, ?)",
+            ("2026-07-08T10:00:00Z", "s", "r", "claude-sonnet-4-5-20260701", 1000, 500),
+        )
+        conn.commit()
+
+    fill_missing_costs(config)
+
+    with get_connection(config.storage.db_path) as conn:
+        row = conn.execute("SELECT cost_usd FROM requests WHERE id = 1").fetchone()
+    assert row is not None
+    # Global cost = (1000*0.003 + 500*0.015)/1000 = 0.0105; regional = x 1.10
+    assert row["cost_usd"] == pytest.approx(0.0105 * 1.10)
