@@ -349,7 +349,7 @@ def render() -> None:
         actual_col.metric("Actual Bedrock", f"${report.actual_total_cost:.4f}")
         delta_abs = 0.0 if report.delta_abs is None else report.delta_abs
         delta_abs_col.metric("Delta ($)", f"${delta_abs:.4f}")
-        delta_pct = "n/a" if report.delta_pct is None else f"{report.delta_pct}%"
+        delta_pct = "n/a" if report.delta_pct is None else f"{report.delta_pct:.2f}%"
         delta_pct_col.metric("Delta (%)", delta_pct)
 
     st.write(
