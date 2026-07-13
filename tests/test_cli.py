@@ -370,7 +370,7 @@ def test_report_json_with_actual_total(temp_home: Path) -> None:
     result = runner.invoke(main, ["report", "--format", "json", "--actual-total", "1.0"])
     assert result.exit_code == 0
     data = json.loads(result.output)
-    assert data["actual_total_cost"] == 1.0
+    assert data["actual_total_cost"] == pytest.approx(1.0)
     assert data["delta_abs"] is not None
     assert isinstance(data["models"], list)
 

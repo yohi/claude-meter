@@ -32,7 +32,7 @@ def test_usage_record_extended_usage_fields_default() -> None:
         session_id="s-1",
         request_id="r-1",
         model="claude-opus-4-8",
-        source_file=Path("/tmp/x.jsonl"),
+        source_file=Path("x.jsonl"),
     )
     assert record.cache_creation_5m_tokens == 0
     assert record.cache_creation_1h_tokens == 0
@@ -49,7 +49,7 @@ def test_usage_record_accepts_extended_usage_fields() -> None:
         session_id="s-1",
         request_id="r-1",
         model="claude-opus-4-8",
-        source_file=Path("/tmp/x.jsonl"),
+        source_file=Path("x.jsonl"),
         cache_creation_5m_tokens=21000,
         cache_creation_1h_tokens=288,
         web_search_requests=3,

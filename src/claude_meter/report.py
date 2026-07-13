@@ -116,6 +116,44 @@ def _max_updated_at(records: list[PricingRecord]) -> str | None:
     return max(stamps).isoformat()
 
 
+def _unit_prices(
+    price: PricingRecord | None,
+) -> tuple[float | None, float | None, float | None, float | None, float | None]:
+    """Resolve per-1k unit prices (input, output, cache_write_5m, cache_write_1h,
+    cache_read) for a PricingRecord, or all-None when the model is unresolved."""
+    if price is None:
+        return None, None, None, None, None
+    unit_1h = (
+        None
+        if price.input_price_per_1k is None
+        else price.input_price_per_1k * CACHE_1H_INPUT_MULTIPLIER
+    )
+    return (
+        price.input_price_per_1k,
+        price.output_price_per_1k,
+        price.cache_creation_price_per_1k,
+        unit_1h,
+        price.cache_read_price_per_1k,
+    )
+
+
+def _build_components(
+    spec: list[tuple[str, int, float | None]], factor: float
+) -> tuple[list[ComponentRow], float | None]:
+    """Compute the per-token-type ComponentRows and their total cost (None when
+    any component with used tokens has no resolvable price)."""
+    components: list[ComponentRow] = []
+    estimated: float | None = 0.0
+    for token_type, tokens, unit in spec:
+        cost = _component_cost(tokens, unit, factor)
+        components.append(ComponentRow(token_type, tokens, unit, cost))
+        if cost is None:
+            estimated = None
+        elif estimated is not None:
+            estimated += cost
+    return components, estimated
+
+
 def _model_row(
     row: sqlite3.Row,
     region: str,
@@ -126,21 +164,8 @@ def _model_row(
     model = str(row["model"])
     price = price_for_model(model, region, pricing, canonical_index)
     cache_1h = int(row["cw1h"] or 0)
-    cache_agg = int(row["cw"] or 0)
-    cache_5m = max(0, cache_agg - cache_1h)
-
-    if price is None:
-        unit_input = unit_output = unit_5m = unit_1h = unit_read = None
-    else:
-        unit_input = price.input_price_per_1k
-        unit_output = price.output_price_per_1k
-        unit_5m = price.cache_creation_price_per_1k
-        unit_1h = (
-            None
-            if price.input_price_per_1k is None
-            else price.input_price_per_1k * CACHE_1H_INPUT_MULTIPLIER
-        )
-        unit_read = price.cache_read_price_per_1k
+    cache_5m = max(0, int(row["cw"] or 0) - cache_1h)
+    unit_input, unit_output, unit_5m, unit_1h, unit_read = _unit_prices(price)
 
     spec: list[tuple[str, int, float | None]] = [
         ("input", int(row["inp"] or 0), unit_input),
@@ -149,15 +174,7 @@ def _model_row(
         ("cache_write_1h", cache_1h, unit_1h),
         ("cache_read", int(row["cr"] or 0), unit_read),
     ]
-    components: list[ComponentRow] = []
-    estimated: float | None = 0.0
-    for token_type, tokens, unit in spec:
-        cost = _component_cost(tokens, unit, factor)
-        components.append(ComponentRow(token_type, tokens, unit, cost))
-        if cost is None:
-            estimated = None
-        elif estimated is not None:
-            estimated += cost
+    components, estimated = _build_components(spec, factor)
 
     stored = row["stored_cost"]
     return ModelRow(
@@ -168,6 +185,95 @@ def _model_row(
         estimated_cost=None if estimated is None else round(estimated, 6),
         stored_cost_usd=None if stored is None else round(float(stored), 6),
         components=components,
+    )
+
+
+def _period_filter(days: int | None) -> tuple[str, tuple[str, ...], datetime | None, datetime]:
+    """Build the SQL WHERE clause/params for a --days window, plus the resolved
+    (period_from, period_to) bounds (period_from is None for all-time)."""
+    period_to = datetime.now(timezone.utc)
+    period_from = None if days is None else period_to - timedelta(days=days)
+    where = "WHERE timestamp >= ?" if period_from is not None else ""
+    params = (period_from.isoformat(),) if period_from is not None else ()
+    return where, params, period_from, period_to
+
+
+def _fetch_rows(
+    conn: sqlite3.Connection, where: str, params: tuple[str, ...]
+) -> tuple[list[sqlite3.Row], sqlite3.Row]:
+    """Fetch the per-model token/cost aggregates and the overall totals row."""
+    model_rows_raw = conn.execute(
+        f"""SELECT model,
+               COUNT(*) AS requests,
+               SUM(COALESCE(input_tokens, 0)) AS inp,
+               SUM(COALESCE(output_tokens, 0)) AS outp,
+               SUM(COALESCE(cache_creation_input_tokens, 0)) AS cw,
+               SUM(COALESCE(cache_creation_1h_tokens, 0)) AS cw1h,
+               SUM(COALESCE(cache_read_input_tokens, 0)) AS cr,
+               SUM(cost_usd) AS stored_cost
+           FROM requests {where}
+           GROUP BY model""",
+        params,
+    ).fetchall()
+    totals = conn.execute(
+        f"""SELECT COUNT(*) AS total,
+               COALESCE(SUM(cost_usd), 0.0) AS stored_total,
+               SUM(COALESCE(cache_creation_1h_tokens, 0)) AS cw1h_total,
+               SUM(
+                   CASE WHEN service_tier IS NOT NULL AND service_tier != 'standard'
+                        THEN 1 ELSE 0 END
+               ) AS nonstd_tier,
+               SUM(
+                   CASE WHEN speed IS NOT NULL AND speed != 'standard'
+                        THEN 1 ELSE 0 END
+               ) AS nonstd_speed,
+               SUM(COALESCE(web_search_requests, 0)) AS web_search,
+               SUM(COALESCE(web_fetch_requests, 0)) AS web_fetch
+           FROM requests {where}""",
+        params,
+    ).fetchone()
+    return model_rows_raw, totals
+
+
+def _aggregate_models(
+    model_rows_raw: list[sqlite3.Row],
+    region: str,
+    pricing: dict[tuple[str, str], PricingRecord],
+    canonical_index: dict[tuple[str, str], PricingRecord],
+    factor: float,
+) -> tuple[list[ModelRow], float, int, list[str]]:
+    """Build per-model rows and roll up the estimated total cost, the count of
+    priced requests, and the sorted list of models that could not be priced."""
+    models: list[ModelRow] = []
+    estimated_total = 0.0
+    priced_requests = 0
+    unpriced_models: list[str] = []
+    for raw in model_rows_raw:
+        model_row = _model_row(raw, region, pricing, canonical_index, factor)
+        models.append(model_row)
+        if model_row.estimated_cost is not None:
+            estimated_total += model_row.estimated_cost
+            priced_requests += model_row.requests
+        else:
+            unpriced_models.append(model_row.model)
+    models.sort(key=lambda m: (m.estimated_cost is not None, m.estimated_cost or 0.0), reverse=True)
+    return models, round(estimated_total, 6), priced_requests, sorted(unpriced_models)
+
+
+def _apply_actual_total(
+    report: ReconciliationReport,
+    actual_total_cost: float | None,
+    estimated_total: float,
+) -> None:
+    """Populate the actual-cost/delta fields on report in place, when given."""
+    if actual_total_cost is None:
+        return
+    report.actual_total_cost = actual_total_cost
+    report.delta_abs = round(actual_total_cost - estimated_total, 6)
+    report.delta_pct = (
+        None
+        if not estimated_total
+        else round((actual_total_cost - estimated_total) / estimated_total * 100, 2)
     )
 
 
@@ -187,60 +293,16 @@ def build_report(
     canonical_index = build_canonical_pricing_index(pricing)
     factor = endpoint_cost_factor(config.claude.inference_endpoint)
     region = config.claude.region
-
-    period_to = datetime.now(timezone.utc)
-    period_from: datetime | None = None if days is None else period_to - timedelta(days=days)
-    where = "WHERE timestamp >= ?" if period_from is not None else ""
-    params: tuple[str, ...] = (period_from.isoformat(),) if period_from is not None else ()
+    where, params, period_from, period_to = _period_filter(days)
 
     with closing(get_connection(config.storage.db_path)) as conn:
-        model_rows_raw = conn.execute(
-            f"""SELECT model,
-                   COUNT(*) AS requests,
-                   SUM(COALESCE(input_tokens, 0)) AS inp,
-                   SUM(COALESCE(output_tokens, 0)) AS outp,
-                   SUM(COALESCE(cache_creation_input_tokens, 0)) AS cw,
-                   SUM(COALESCE(cache_creation_1h_tokens, 0)) AS cw1h,
-                   SUM(COALESCE(cache_read_input_tokens, 0)) AS cr,
-                   SUM(cost_usd) AS stored_cost
-               FROM requests {where}
-               GROUP BY model""",
-            params,
-        ).fetchall()
-        totals = conn.execute(
-            f"""SELECT COUNT(*) AS total,
-                   COALESCE(SUM(cost_usd), 0.0) AS stored_total,
-                   SUM(COALESCE(cache_creation_1h_tokens, 0)) AS cw1h_total,
-                   SUM(
-                       CASE WHEN service_tier IS NOT NULL AND service_tier != 'standard'
-                            THEN 1 ELSE 0 END
-                   ) AS nonstd_tier,
-                   SUM(
-                       CASE WHEN speed IS NOT NULL AND speed != 'standard'
-                            THEN 1 ELSE 0 END
-                   ) AS nonstd_speed,
-                   SUM(COALESCE(web_search_requests, 0)) AS web_search,
-                   SUM(COALESCE(web_fetch_requests, 0)) AS web_fetch
-               FROM requests {where}""",
-            params,
-        ).fetchone()
+        model_rows_raw, totals = _fetch_rows(conn, where, params)
 
-    models: list[ModelRow] = []
-    estimated_total = 0.0
-    priced_requests = 0
-    unpriced_models: list[str] = []
-    for raw in model_rows_raw:
-        model_row = _model_row(raw, region, pricing, canonical_index, factor)
-        models.append(model_row)
-        if model_row.estimated_cost is not None:
-            estimated_total += model_row.estimated_cost
-            priced_requests += model_row.requests
-        else:
-            unpriced_models.append(model_row.model)
-    models.sort(key=lambda m: (m.estimated_cost is not None, m.estimated_cost or 0.0), reverse=True)
-
+    models, estimated_total, priced_requests, unpriced_models = _aggregate_models(
+        model_rows_raw, region, pricing, canonical_index, factor
+    )
     total_requests = int(totals["total"] or 0)
-    estimated_total = round(estimated_total, 6)
+
     report = ReconciliationReport(
         generated_at=datetime.now(timezone.utc).isoformat(),
         period_from=None if period_from is None else period_from.isoformat(),
@@ -255,7 +317,7 @@ def build_report(
         unpriced_requests=total_requests - priced_requests,
         estimated_total_cost=estimated_total,
         stored_total_cost=round(float(totals["stored_total"] or 0.0), 6),
-        unpriced_models=sorted(unpriced_models),
+        unpriced_models=unpriced_models,
         cache_1h_present=int(totals["cw1h_total"] or 0) > 0,
         non_standard_tier_requests=int(totals["nonstd_tier"] or 0),
         non_standard_speed_requests=int(totals["nonstd_speed"] or 0),
@@ -263,14 +325,7 @@ def build_report(
         web_fetch_requests=int(totals["web_fetch"] or 0),
         models=models,
     )
-    if actual_total_cost is not None:
-        report.actual_total_cost = actual_total_cost
-        report.delta_abs = round(actual_total_cost - estimated_total, 6)
-        report.delta_pct = (
-            None
-            if estimated_total == 0.0
-            else round((actual_total_cost - estimated_total) / estimated_total * 100, 2)
-        )
+    _apply_actual_total(report, actual_total_cost, estimated_total)
     return report
 
 
@@ -299,6 +354,39 @@ def to_csv(report: ReconciliationReport) -> str:
     return buf.getvalue()
 
 
+def _markdown_actual_section(report: ReconciliationReport) -> list[str]:
+    """The 'Actual vs estimate' section, or [] when no actual total was given."""
+    if report.actual_total_cost is None:
+        return []
+    delta_pct = "n/a" if report.delta_pct is None else f"{report.delta_pct}%"
+    delta_abs = 0.0 if report.delta_abs is None else report.delta_abs
+    return [
+        "",
+        "## Actual vs estimate",
+        "",
+        f"- Actual Bedrock: ${report.actual_total_cost:.4f}",
+        f"- Delta (actual - estimate): ${delta_abs:.4f} ({delta_pct})",
+    ]
+
+
+def _markdown_component_rows(report: ReconciliationReport) -> list[str]:
+    """One Markdown table row per (model, token-type) component."""
+    lines: list[str] = []
+    for model_row in report.models:
+        for component in model_row.components:
+            unit = (
+                "-"
+                if component.unit_price_per_1k is None
+                else f"{component.unit_price_per_1k:.6f}"
+            )
+            cost = "-" if component.cost is None else f"{component.cost:.6f}"
+            lines.append(
+                f"| {model_row.model} | {component.token_type} | "
+                f"{component.tokens:,} | {unit} | {cost} |"
+            )
+    return lines
+
+
 def to_markdown(report: ReconciliationReport) -> str:
     lines: list[str] = [
         "# claude-meter Reconciliation Report",
@@ -318,16 +406,7 @@ def to_markdown(report: ReconciliationReport) -> str:
     ]
     if report.unpriced_models:
         lines.append(f"- WARNING unpriced models: {', '.join(report.unpriced_models)}")
-    if report.actual_total_cost is not None:
-        delta_pct = "n/a" if report.delta_pct is None else f"{report.delta_pct}%"
-        delta_abs = 0.0 if report.delta_abs is None else report.delta_abs
-        lines += [
-            "",
-            "## Actual vs estimate",
-            "",
-            f"- Actual Bedrock: ${report.actual_total_cost:.4f}",
-            f"- Delta (actual - estimate): ${delta_abs:.4f} ({delta_pct})",
-        ]
+    lines += _markdown_actual_section(report)
     lines += [
         "",
         "## Divergence flags",
@@ -343,12 +422,5 @@ def to_markdown(report: ReconciliationReport) -> str:
         "| Model | Token type | Tokens | Unit $/1k | Est. cost |",
         "| --- | --- | ---: | ---: | ---: |",
     ]
-    for model_row in report.models:
-        for component in model_row.components:
-            unit = "-" if component.unit_price_per_1k is None else f"{component.unit_price_per_1k:.6f}"
-            cost = "-" if component.cost is None else f"{component.cost:.6f}"
-            lines.append(
-                f"| {model_row.model} | {component.token_type} | "
-                f"{component.tokens:,} | {unit} | {cost} |"
-            )
+    lines += _markdown_component_rows(report)
     return "\n".join(lines) + "\n"
