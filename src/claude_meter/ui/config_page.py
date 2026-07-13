@@ -16,12 +16,20 @@ def _timezone_options() -> list[str]:
 
 def _timezone_to_option(name: str | None) -> str:
     """Map a stored config value (``None`` or IANA name) to a selectbox option."""
-    return name if name else _AUTO_DETECT_LABEL
+    return _AUTO_DETECT_LABEL if name is None else name
 
 
 def _option_to_timezone(option: str) -> str | None:
     """Map a selectbox option back to a storable config value."""
     return None if option == _AUTO_DETECT_LABEL else option
+
+
+def _get_timezone_option_index(option: str, options: list[str]) -> int:
+    """Return the index of option in options, or 0 if not found."""
+    try:
+        return options.index(option)
+    except ValueError:
+        return 0
 
 
 def render() -> None:
@@ -58,10 +66,11 @@ def render() -> None:
             step=1,
         )
         timezone_options = _timezone_options()
+        timezone_option_value = _timezone_to_option(config.ui.timezone)
         timezone_option = st.selectbox(
             "UI timezone",
             options=timezone_options,
-            index=timezone_options.index(_timezone_to_option(config.ui.timezone)),
+            index=_get_timezone_option_index(timezone_option_value, timezone_options),
             help=(
                 "Used to bucket daily costs by local day. "
                 f"{_AUTO_DETECT_LABEL} uses the system's local timezone."
