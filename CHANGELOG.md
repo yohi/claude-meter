@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.5.0](https://github.com/yohi/claude-meter/compare/v0.4.0...v0.5.0) (2026-07-13)
+
+
+### Features
+
+* OverviewページにReconciliation(突合レポート)セクションを追加 ([22b460d](https://github.com/yohi/claude-meter/commit/22b460de425a4235dc3c4fb843b0ef324e7ccfdf))
+* usageレコードにキャッシュTTL内訳等の拡張フィールドを追加 ([4fb13b5](https://github.com/yohi/claude-meter/commit/4fb13b51feb5045da1fd5e77e266702b4eed7236))
+* usage拡張収集とTotalCost突合レポート機能の追加 ([b955e7a](https://github.com/yohi/claude-meter/commit/b955e7a70809473790be59957b080010ccd3fab8))
+* 推論エンドポイント種別とキャッシュTTL別課金をコスト計算に反映 ([3923404](https://github.com/yohi/claude-meter/commit/3923404a2e8fffeaa4cca99548fef77c28b4b357))
+
+
+### Bug Fixes
+
+* CSVレポートの改行をLFに固定 ([79c1c4b](https://github.com/yohi/claude-meter/commit/79c1c4b6c5336b1f85eac064ce2d2248bda40952))
+* Delta(%)表示の小数点桁数を統一する ([49aaedf](https://github.com/yohi/claude-meter/commit/49aaedf2b5490e3cc6d847263c9f1c50a1ace0ae))
+* Reconciliation欄の実績額入力の初期値を未入力状態にする ([cd56f05](https://github.com/yohi/claude-meter/commit/cd56f0556c865858494fa2b9892bf8ff21b25e4b))
+* requestsテーブルの拡張カラムマイグレーションを並行実行に耐性化 ([caf2639](https://github.com/yohi/claude-meter/commit/caf26395f21ffab248e1b94c8a03ebad690f91f6))
+* SonarCloudのQuality Gate指摘(Reliability/Security/複雑度)を解消 ([83c2be2](https://github.com/yohi/claude-meter/commit/83c2be2d9e1935609060bcd9d4cdab432640deb9))
+* 突合レポートのリージョン別コスト計算とpricing表示のNone対応 ([39d6817](https://github.com/yohi/claude-meter/commit/39d6817e9d9762ba81fa0e8628dabab80ba62578))
+
 ## [0.4.0](https://github.com/yohi/claude-meter/compare/v0.3.4...v0.4.0) (2026-07-13)
 
 
