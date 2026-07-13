@@ -19,7 +19,7 @@ import json
 import sqlite3
 from contextlib import closing
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from claude_meter.config import Config
 from claude_meter.cost import (
@@ -197,13 +197,57 @@ def _model_row(
     )
 
 
-def _period_filter(days: int | None) -> tuple[str, tuple[str, ...], datetime | None, datetime]:
+def _period_filter(
+    days: int | None = None,
+    *,
+    start: date | None = None,
+    end: date | None = None,
+    tz_modifiers: list[str] | None = None,
+) -> tuple[str, tuple[str, ...], datetime | None, datetime]:
     """Build the SQL WHERE clause/params for a --days window, plus the resolved
-    (period_from, period_to) bounds (period_from is None for all-time)."""
-    period_to = datetime.now(timezone.utc)
-    period_from = None if days is None else period_to - timedelta(days=days)
-    where = "WHERE timestamp >= ?" if period_from is not None else ""
-    params = (period_from.isoformat(),) if period_from is not None else ()
+    (period_from, period_to) bounds (period_from is None for all-time).
+
+    Exactly one of ``days`` or ``(start, end)`` must be provided.
+    ``tz_modifiers`` is required for custom date ranges; it is used to shift the
+    local date boundaries into UTC before querying the UTC ``timestamp`` column.
+    """
+    if days is not None and (start is not None or end is not None):
+        raise ValueError("Specify either days or (start, end), not both.")
+    if start is not None and end is None:
+        raise ValueError("Custom ranges require both start and end dates.")
+    if end is not None and start is None:
+        raise ValueError("Custom ranges require both start and end dates.")
+    if start is not None and tz_modifiers is None:
+        raise ValueError("Custom ranges require tz_modifiers.")
+
+    if start is not None and end is not None:
+        assert tz_modifiers is not None  # type safety
+        period_to_local = datetime.combine(
+            end + timedelta(days=1), datetime.min.time(), tzinfo=timezone.utc
+        )
+        period_from_local = datetime.combine(
+            start, datetime.min.time(), tzinfo=timezone.utc
+        )
+        # Shift local-date min forward by tz offset to get the UTC instant that
+        # corresponds to start-of-day in the configured UI timezone.
+        for modifier in tz_modifiers:
+            sign = modifier[0]
+            n, unit = modifier[1:].split()  # e.g. '9', 'hours'
+            delta = timedelta(**{unit: int(n)})
+            period_from_local += delta if sign == "-" else -delta
+            period_to_local += delta if sign == "-" else -delta
+        period_from: datetime | None = period_from_local
+        period_to: datetime = period_to_local
+        where = "WHERE timestamp >= ? AND timestamp < ?"
+        params: tuple[str, ...] = (
+            period_from_local.isoformat(),
+            period_to_local.isoformat(),
+        )
+    else:
+        period_to = datetime.now(timezone.utc)
+        period_from = None if days is None else period_to - timedelta(days=days)
+        where = "WHERE timestamp >= ?" if period_from is not None else ""
+        params = (period_from.isoformat(),) if period_from is not None else ()
     return where, params, period_from, period_to
 
 
@@ -299,11 +343,16 @@ def build_report(
     config: Config,
     *,
     days: int | None = None,
+    start: date | None = None,
+    end: date | None = None,
+    tz_modifiers: list[str] | None = None,
     actual_total_cost: float | None = None,
 ) -> ReconciliationReport:
     """Build a reconciliation report for the requests table.
 
     ``days`` limits to the last N days (UTC); ``None`` covers all time.
+    ``start``/``end`` define a custom inclusive date range in the configured UI
+    timezone (mutually exclusive with ``days``).
     ``actual_total_cost`` (if given) adds the delta against the estimate.
     """
     records = update_pricing(config)
@@ -311,7 +360,9 @@ def build_report(
     canonical_index = build_canonical_pricing_index(pricing)
     factor = endpoint_cost_factor(config.claude.inference_endpoint)
     region = config.claude.region
-    where, params, period_from, period_to = _period_filter(days)
+    where, params, period_from, period_to = _period_filter(
+        days, start=start, end=end, tz_modifiers=tz_modifiers
+    )
 
     with closing(get_connection(config.storage.db_path)) as conn:
         model_rows_raw, totals = _fetch_rows(conn, where, params)

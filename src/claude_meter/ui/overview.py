@@ -3,7 +3,7 @@
 from contextlib import closing
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
 import sqlite3
-from typing import Any
+from typing import Any, TypedDict
 
 import altair as alt
 import pandas as pd
@@ -193,14 +193,14 @@ _RECONCILIATION_PERIOD_DAYS: dict[str, int | None] = {
     _LABEL_LAST_7_DAYS: 7,
     _LABEL_LAST_30_DAYS: 30,
     "Last 90 days": 90,
-}
+    "Custom": -1,
+}  # noqa: E501
 
 
 def _reconciliation_days(label: str) -> int | None:
     """Map a reconciliation period label to build_report's ``days`` argument.
 
-    Kept independent from the top-of-page ``Period`` control: build_report only
-    supports a last-N-days (or all-time) window, not an arbitrary start/end range.
+    ``None`` = all time; ``-1`` = custom (caller must supply start/end).
     """
     return _RECONCILIATION_PERIOD_DAYS[label]
 
@@ -235,12 +235,50 @@ def _reconciliation_breakdown(models: list[ModelRow]) -> pd.DataFrame:
         ],
     )
 
+class _ReconciliationReportKwargs(TypedDict):
+    config: Config
+    days: int | None
+    start: date | None
+    end: date | None
+    tz_modifiers: list[str] | None
+    actual_total_cost: float | None
+
+
+def _reconciliation_report_kwargs(
+    config: Config,
+    recon_days: int | None,
+    recon_start: date | None,
+    recon_end: date | None,
+    tz_modifiers: list[str] | None,
+    actual_total_cost: float | None,
+) -> _ReconciliationReportKwargs:
+    return _ReconciliationReportKwargs(
+        config=config,
+        days=None if recon_days == -1 else recon_days,
+        start=recon_start,
+        end=recon_end,
+        tz_modifiers=tz_modifiers if recon_days == -1 else None,
+        actual_total_cost=actual_total_cost,
+    )
+
 
 @st.cache_data(ttl=30, show_spinner=False)
 def _cached_build_report(
-    config: Config, days: int | None, actual_total_cost: float | None
+    config: Config,
+    days: int | None,
+    start: date | None,
+    end: date | None,
+    tz_modifiers: list[str] | None,
+    actual_total_cost: float | None,
 ) -> ReconciliationReport:
-    return build_report(config, days=days, actual_total_cost=actual_total_cost)
+    return build_report(
+        config,
+        days=days,
+        start=start,
+        end=end,
+        tz_modifiers=tz_modifiers,
+        actual_total_cost=actual_total_cost,
+    )
 
 
 def render() -> None:
@@ -333,6 +371,12 @@ def render() -> None:
         key="reconciliation_period",
     )
     recon_days = _reconciliation_days(recon_label)
+    recon_start: date | None = None
+    recon_end: date | None = None
+    if recon_days == -1:
+        rcol1, rcol2 = st.columns(2)
+        recon_start = rcol1.date_input("Reconciliation start", today - timedelta(days=6))
+        recon_end = rcol2.date_input("Reconciliation end", today)
     compare_actual = st.checkbox("実際のBedrock請求額を入力して比較する")
     actual_total_cost: float | None = None
     if compare_actual:
@@ -346,7 +390,14 @@ def render() -> None:
         )
     try:
         report = _cached_build_report(
-            config, days=recon_days, actual_total_cost=actual_total_cost
+            **_reconciliation_report_kwargs(
+                config,
+                recon_days,
+                recon_start,
+                recon_end,
+                tz_modifiers,
+                actual_total_cost,
+            )
         )
     except Exception as exc:
         st.error(f"Failed to build reconciliation report: {exc}")
