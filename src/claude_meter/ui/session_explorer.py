@@ -230,13 +230,21 @@ def render() -> None:
             if sessions.empty:
                 st.info("フィルタ条件に一致するセッションが見つかりません。")
                 return
+        session_project_map = {
+            row["session_id"]: _text_or_empty(row["project"]) or "-"
+            for _, row in sessions.iterrows()
+        }
         sessions["project"] = sessions.apply(
             lambda row: _format_project_label(row["project"], row["git_repository"]),
             axis=1,
         )
         sessions = sessions.drop(columns=["git_repository"])
         st.dataframe(sessions, use_container_width=True)
-        selected = st.selectbox("Session", sessions["session_id"].tolist())
+        selected = st.selectbox(
+            "Session",
+            sessions["session_id"].tolist(),
+            format_func=lambda sid: f"{sid} ({session_project_map.get(sid, '-')})",
+        )
         if not selected:
             return
         show_prompts = config.privacy.show_prompts_in_ui
