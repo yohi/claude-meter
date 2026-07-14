@@ -73,4 +73,5 @@ def test_resolve_app_version_falls_back_to_package_version_without_git_repo(
 
 def test_get_app_version_matches_resolve_for_real_repo_root() -> None:
     """Test that get_app_version matches resolve_app_version for the real repo."""
+    get_app_version.cache_clear()
     assert get_app_version() == resolve_app_version(_REPO_ROOT)
