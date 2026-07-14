@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.7.1](https://github.com/yohi/claude-meter/compare/v0.7.0...v0.7.1) (2026-07-14)
+
+
+### Bug Fixes
+
+* idx_requests_message_id を既存DBのmessage_id列マイグレーション後に作成 ([19ba682](https://github.com/yohi/claude-meter/commit/19ba6826e0013ac2ba05a75d7dd9be3d216a4c10))
+* 並列tool_use分割によるトークン使用量の二重集計を修正 ([324c23d](https://github.com/yohi/claude-meter/commit/324c23d6426a2f6d5c0d6796ccb83a5de2248790))
+* 並列tool_use分割によるトークン使用量の二重集計を修正 ([a821465](https://github.com/yohi/claude-meter/commit/a821465bed3273d32d85cb88059f5851694dc03a))
+
 ## [0.7.0](https://github.com/yohi/claude-meter/compare/v0.6.0...v0.7.0) (2026-07-13)
 
 
