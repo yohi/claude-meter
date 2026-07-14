@@ -1081,6 +1081,64 @@ def test_split_without_message_id_dedups_by_structural_key(temp_home: Path) -> N
     assert by_id["a3"]["cache_read_input_tokens"] == 0
 
 
+def test_split_without_message_id_zeroes_response_time_ms_on_duplicate(
+    temp_home: Path,
+) -> None:
+    """Regression test: duplicate rows collapsed by ``_collapse_split_messages``
+    must have ``response_time_ms`` nulled out alongside the token/cost columns.
+    Each split line carries its OWN transcript timestamp (and thus its own,
+    distinct ``response_time_ms`` relative to the shared triggering input), so
+    leaving it un-zeroed would let a duplicate row's response time leak into
+    ``AVG(response_time_ms)`` aggregates (ui/overview.py) even though the row's
+    usage/cost has already been zeroed as non-billable."""
+    session_id = "s-split-rtms"
+    usage = {"input_tokens": 2, "output_tokens": 10, "cache_read_input_tokens": 500}
+    records: list[dict[str, object]] = [
+        {
+            "type": "user", "uuid": "u1", "parentUuid": None,
+            "timestamp": "2026-07-09T02:15:00.000Z", "cwd": "/x",
+            "sessionId": session_id,
+            "message": {"role": "user", "content": "do a bunch of things"},
+        },
+        {
+            "type": "assistant", "uuid": "a1", "parentUuid": "u1",
+            "timestamp": "2026-07-09T02:15:05.000Z", "cwd": "/x",
+            "sessionId": session_id,
+            "message": {"model": "claude-sonnet-5",
+                        "content": [{"type": "text", "text": "ok"}], "usage": usage},
+        },
+        {
+            # Same response, split into a second line 3s later; no user record
+            # between them -> collapsed as a duplicate of a1.
+            "type": "assistant", "uuid": "a2", "parentUuid": "a1",
+            "timestamp": "2026-07-09T02:15:08.000Z", "cwd": "/x",
+            "sessionId": session_id,
+            "message": {"model": "claude-sonnet-5",
+                        "content": [{"type": "tool_use", "id": "t", "name": "b", "input": {}}],
+                        "usage": usage},
+        },
+    ]
+    config = load_config()
+    _write_jsonl(temp_home / ".claude" / "projects" / "demo" / f"{session_id}.jsonl", records)
+    init_db(config.storage.db_path)
+    assert parse_incremental(config) == 2
+
+    with closing(get_connection(config.storage.db_path)) as conn:
+        rows = conn.execute(
+            "SELECT request_id, is_duplicate, response_time_ms FROM requests "
+            "WHERE session_id = ? ORDER BY request_id",
+            (session_id,),
+        ).fetchall()
+    by_id = {r["request_id"]: r for r in rows}
+    # Keeper: not a duplicate, keeps its real (non-null) response time.
+    assert by_id["a1"]["is_duplicate"] == 0
+    assert by_id["a1"]["response_time_ms"] == 5000
+    # Duplicate: usage already zeroed elsewhere; response_time_ms must be NULL
+    # too, so it cannot pollute AVG(response_time_ms) aggregates.
+    assert by_id["a2"]["is_duplicate"] == 1
+    assert by_id["a2"]["response_time_ms"] is None
+
+
 def test_structural_dedup_does_not_merge_distinct_turns_with_same_usage(
     temp_home: Path,
 ) -> None:

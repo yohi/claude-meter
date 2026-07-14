@@ -543,6 +543,7 @@ def _collapse_split_messages(conn: sqlite3.Connection) -> None:
                        web_search_requests = 0,
                        web_fetch_requests = 0,
                        cost_usd = 0.0,
+                       response_time_ms = NULL,
                        is_duplicate = 1
                    WHERE id = ?""",
                 [(dup_id,) for dup_id in duplicate_ids],
