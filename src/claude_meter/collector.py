@@ -420,6 +420,7 @@ def parse_incremental(config: Config, *, reparse: bool = False) -> int:
                             speed=usage.get("speed") or None,
                             inference_geo=usage.get("inference_geo") or None,
                             message_id=message_id,
+                            input_ts=last_input_ts,
                             response_time_ms=response_time_ms,
                             prompt_text=prompt_text,
                             response_text=response_text,
@@ -448,7 +449,92 @@ def parse_incremental(config: Config, *, reparse: bool = False) -> int:
                 last_input_ts,
             )
             conn.commit()
+        _collapse_split_messages(conn)
     return inserted
+
+
+def _collapse_split_messages(conn: sqlite3.Connection) -> None:
+    """Zero the usage of duplicate rows from split assistant lines lacking a message.id.
+
+    Older ClaudeCode transcripts (and any assistant record missing ``message.id``)
+    split ONE API response across multiple consecutive ``assistant`` JSONL lines --
+    one per content block (thinking / text / each parallel ``tool_use``) -- and
+    every split line carries an identical copy of that single response's ``usage``
+    block. With no ``message.id`` to key on, ``_claim_message_id`` cannot dedup them
+    inline (it returns True for message_id=None), so they are collapsed here by a
+    structural key instead.
+
+    Structural key: (session_id, source_file, input_ts, usage 4-tuple). All split
+    lines of one response share the SAME triggering input timestamp (``input_ts`` --
+    no ``user`` record falls between them, so ``collector.last_input_ts`` never
+    advances) AND an identical usage 4-tuple. Two genuinely distinct API calls are
+    separated by a ``user`` record (a tool_result), which advances ``input_ts`` and
+    gives them different keys -- this is what prevents false merges (the DB stores
+    only ``assistant`` rows, so row adjacency alone cannot prove "no user between";
+    ``input_ts`` is the reliable turn discriminator). Within one key only the
+    lowest-``id`` row stays billable; the rest are zeroed and flagged.
+
+    Scoped to ``message_id IS NULL``: rows with a real ``message.id`` are already
+    deduplicated inline by ``_claim_message_id`` and are never touched here.
+
+    Idempotent: zeroed rows carry ``is_duplicate = 1`` and are excluded from
+    re-grouping, so repeated ``collect`` runs never re-collapse them or flip the
+    keeper. ``_insert_usage`` resets ``is_duplicate`` to 0 on re-insert, so a row
+    whose full usage is restored (incremental re-read or ``--reparse``) is
+    re-collapsed deterministically to the same result.
+
+    Wrapped in ``BEGIN IMMEDIATE`` so concurrent collect/watch/ui processes sharing
+    the SQLite file serialise on this pass instead of racing (matching the
+    per-record atomicity contract used by the message_id path).
+    """
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        rows = conn.execute(
+            """SELECT id, session_id, source_file, input_ts,
+                      input_tokens, output_tokens,
+                      cache_creation_input_tokens, cache_read_input_tokens
+               FROM requests
+               WHERE message_id IS NULL AND is_duplicate = 0
+               ORDER BY session_id, source_file, input_ts, id"""
+        ).fetchall()
+        seen: set[tuple[object, ...]] = set()
+        duplicate_ids: list[int] = []
+        for row in rows:
+            key = (
+                row["session_id"],
+                row["source_file"],
+                row["input_ts"],
+                row["input_tokens"],
+                row["output_tokens"],
+                row["cache_creation_input_tokens"],
+                row["cache_read_input_tokens"],
+            )
+            if key in seen:
+                duplicate_ids.append(row["id"])
+            else:
+                seen.add(key)
+        if duplicate_ids:
+            conn.executemany(
+                """UPDATE requests SET
+                       input_tokens = 0,
+                       output_tokens = 0,
+                       cache_creation_input_tokens = 0,
+                       cache_read_input_tokens = 0,
+                       cache_creation_5m_tokens = 0,
+                       cache_creation_1h_tokens = 0,
+                       web_search_requests = 0,
+                       web_fetch_requests = 0,
+                       cost_usd = 0.0,
+                       is_duplicate = 1
+                   WHERE id = ?""",
+                [(dup_id,) for dup_id in duplicate_ids],
+            )
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
 
 
 def _claim_message_id(
@@ -511,8 +597,8 @@ def _insert_usage(conn: sqlite3.Connection, rec: UsageRecord) -> bool:
             response_text, source_file,
             cache_creation_5m_tokens, cache_creation_1h_tokens,
             web_search_requests, web_fetch_requests, service_tier, speed, inference_geo,
-            message_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            message_id, input_ts
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id, request_id) DO UPDATE SET
             timestamp=excluded.timestamp,
             project=excluded.project,
@@ -535,7 +621,11 @@ def _insert_usage(conn: sqlite3.Connection, rec: UsageRecord) -> bool:
             service_tier=excluded.service_tier,
             speed=excluded.speed,
             inference_geo=excluded.inference_geo,
-            message_id=excluded.message_id""",
+            message_id=excluded.message_id,
+            input_ts=excluded.input_ts,
+            -- Re-inserting restores full usage from the transcript, so clear the
+            -- structural-dedup flag; _collapse_split_messages re-derives it.
+            is_duplicate=0""",
         (
             rec.timestamp.isoformat(),
             rec.session_id,
@@ -561,6 +651,7 @@ def _insert_usage(conn: sqlite3.Connection, rec: UsageRecord) -> bool:
             rec.speed,
             rec.inference_geo,
             rec.message_id,
+            rec.input_ts.isoformat() if rec.input_ts is not None else None,
         ),
     )
     return existing is None

@@ -26,6 +26,7 @@ class UsageRecord(BaseModel):
     speed: str | None = None
     inference_geo: str | None = None
     message_id: str | None = None
+    input_ts: datetime | None = None
     response_time_ms: int | None = None
     cost_usd: float | None = None
     prompt_text: str | None = None

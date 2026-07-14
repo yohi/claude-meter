@@ -26,6 +26,14 @@ CREATE TABLE IF NOT EXISTS requests (
     speed TEXT,
     inference_geo TEXT,
     message_id TEXT,
+    -- input_ts: timestamp of the user/input record that triggered this assistant
+    -- turn (collector.last_input_ts). Split lines of ONE response share it, so it
+    -- is the structural-dedup discriminator for records that lack a message.id.
+    input_ts DATETIME,
+    -- is_duplicate: 1 when a message_id-less split line has been zeroed by
+    -- collector._collapse_split_messages (its usage belongs to the primary row of
+    -- the same response). Kept for idempotency, audit, and count correctness.
+    is_duplicate INTEGER NOT NULL DEFAULT 0,
     response_time_ms INTEGER,
     cost_usd REAL,
     prompt_text TEXT,
@@ -153,6 +161,8 @@ _REQUESTS_EXTENDED_COLUMNS: tuple[tuple[str, str], ...] = (
     ("speed", "TEXT"),
     ("inference_geo", "TEXT"),
     ("message_id", "TEXT"),
+    ("input_ts", "DATETIME"),
+    ("is_duplicate", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 
