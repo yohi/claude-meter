@@ -39,6 +39,7 @@ CREATE INDEX IF NOT EXISTS idx_requests_timestamp ON requests(timestamp);
 CREATE INDEX IF NOT EXISTS idx_requests_project ON requests(project);
 CREATE INDEX IF NOT EXISTS idx_requests_model ON requests(model);
 CREATE INDEX IF NOT EXISTS idx_requests_session ON requests(session_id);
+CREATE INDEX IF NOT EXISTS idx_requests_message_id ON requests(message_id);
 
 CREATE TABLE IF NOT EXISTS pricing (
     model TEXT NOT NULL,
@@ -181,4 +182,3 @@ def migrate_requests(conn: sqlite3.Connection) -> None:
                 # Another process already added this column concurrently; the
                 # migration is idempotent by design, so treat this as a no-op.
                 pass
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_message_id ON requests(message_id)")
