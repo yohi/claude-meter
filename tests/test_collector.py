@@ -710,3 +710,160 @@ def test_parse_incremental_defaults_extended_fields_when_absent(
     assert row["service_tier"] is None
     assert row["speed"] is None
     assert row["inference_geo"] is None
+
+
+def test_parallel_tool_use_split_dedups_usage_by_message_id(temp_home: Path) -> None:
+    """Claude Code splits one API response containing multiple parallel tool_use
+    blocks into several 'assistant' JSONL lines that all share the same real
+    Anthropic response id (message.id) and an identical (duplicated) usage block.
+    Only the first such line may keep the token usage; later lines with the same
+    message.id must be zeroed out so the underlying single Bedrock invocation is
+    not billed multiple times."""
+    projects_dir = temp_home / ".claude" / "projects" / "demo"
+    projects_dir.mkdir(parents=True)
+    session_id = "sess-split"
+    usage_block = {
+        "input_tokens": 2,
+        "output_tokens": 1113,
+        "cache_creation_input_tokens": 3449,
+        "cache_read_input_tokens": 76079,
+    }
+    records = [
+        {
+            "type": "assistant",
+            "uuid": "a1",
+            "parentUuid": None,
+            "timestamp": "2026-07-09T02:15:05.881Z",
+            "cwd": "/x",
+            "sessionId": session_id,
+            "message": {
+                "id": "msg_bdrk_dup1",
+                "model": "claude-sonnet-5",
+                "content": [{"type": "tool_use", "id": "t1", "name": "bash", "input": {}}],
+                "usage": usage_block,
+            },
+        },
+        {
+            "type": "assistant",
+            "uuid": "a2",
+            "parentUuid": "a1",
+            "timestamp": "2026-07-09T02:15:06.884Z",
+            "cwd": "/x",
+            "sessionId": session_id,
+            "message": {
+                "id": "msg_bdrk_dup1",
+                "model": "claude-sonnet-5",
+                "content": [{"type": "tool_use", "id": "t2", "name": "bash", "input": {}}],
+                "usage": usage_block,
+            },
+        },
+    ]
+    (projects_dir / "s-split.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in records), encoding="utf-8"
+    )
+
+    config = load_config()
+    init_db(config.storage.db_path)
+    inserted = parse_incremental(config)
+    assert inserted == 2  # both transcript lines are kept as distinct rows
+
+    with closing(get_connection(config.storage.db_path)) as conn:
+        rows = conn.execute(
+            "SELECT request_id, message_id, input_tokens, output_tokens, "
+            "cache_creation_input_tokens, cache_read_input_tokens "
+            "FROM requests WHERE session_id = ? ORDER BY request_id",
+            (session_id,),
+        ).fetchall()
+    assert len(rows) == 2
+    assert rows[0]["message_id"] == "msg_bdrk_dup1"
+    assert rows[1]["message_id"] == "msg_bdrk_dup1"
+    # Exactly one of the two rows keeps the real usage; the other is zeroed.
+    totals = {
+        "input_tokens": sum(r["input_tokens"] for r in rows),
+        "output_tokens": sum(r["output_tokens"] for r in rows),
+        "cache_creation_input_tokens": sum(r["cache_creation_input_tokens"] for r in rows),
+        "cache_read_input_tokens": sum(r["cache_read_input_tokens"] for r in rows),
+    }
+    assert totals == usage_block
+    # The first-seen row (a1) is the one that keeps the usage.
+    primary = next(r for r in rows if r["request_id"] == "a1")
+    duplicate = next(r for r in rows if r["request_id"] == "a2")
+    assert primary["input_tokens"] == 2
+    assert duplicate["input_tokens"] == 0
+    assert duplicate["output_tokens"] == 0
+    assert duplicate["cache_creation_input_tokens"] == 0
+    assert duplicate["cache_read_input_tokens"] == 0
+
+
+def test_missing_message_id_keeps_legacy_no_dedup_behavior(
+    temp_home: Path, sample_project_jsonl: Path
+) -> None:
+    """Records without message.id (older ClaudeCode versions / the shared test
+    fixture) must not be deduplicated: message_id is NULL and full usage is kept,
+    preserving pre-fix behavior exactly."""
+    config = load_config()
+    init_db(config.storage.db_path)
+    parse_incremental(config)
+
+    with closing(get_connection(config.storage.db_path)) as conn:
+        row = conn.execute(
+            "SELECT message_id, input_tokens FROM requests WHERE request_id = 'a1'"
+        ).fetchone()
+    assert row is not None
+    assert row["message_id"] is None
+    assert row["input_tokens"] == 100
+
+
+def test_message_id_dedup_is_idempotent_across_reparse(temp_home: Path) -> None:
+    """Re-running parse_incremental (and a full --reparse) must not flip which row
+    is primary, and must not zero-out an already-primary row on re-insert."""
+    projects_dir = temp_home / ".claude" / "projects" / "demo"
+    projects_dir.mkdir(parents=True)
+    session_id = "sess-idem"
+    usage_block = {"input_tokens": 5, "output_tokens": 7}
+    records = [
+        {
+            "type": "assistant",
+            "uuid": "a1",
+            "parentUuid": None,
+            "timestamp": "2026-07-09T02:15:05.881Z",
+            "cwd": "/x",
+            "sessionId": session_id,
+            "message": {
+                "id": "msg_bdrk_idem",
+                "model": "m",
+                "content": [{"type": "tool_use", "id": "t1", "name": "bash", "input": {}}],
+                "usage": usage_block,
+            },
+        },
+        {
+            "type": "assistant",
+            "uuid": "a2",
+            "parentUuid": "a1",
+            "timestamp": "2026-07-09T02:15:06.884Z",
+            "cwd": "/x",
+            "sessionId": session_id,
+            "message": {
+                "id": "msg_bdrk_idem",
+                "model": "m",
+                "content": [{"type": "tool_use", "id": "t2", "name": "bash", "input": {}}],
+                "usage": usage_block,
+            },
+        },
+    ]
+    (projects_dir / "s-idem.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in records), encoding="utf-8"
+    )
+
+    config = load_config()
+    init_db(config.storage.db_path)
+    assert parse_incremental(config) == 2
+    assert parse_incremental(config, reparse=True) == 2
+
+    with closing(get_connection(config.storage.db_path)) as conn:
+        rows = conn.execute(
+            "SELECT request_id, input_tokens FROM requests WHERE session_id = ? "
+            "ORDER BY request_id",
+            (session_id,),
+        ).fetchall()
+    assert {r["request_id"]: r["input_tokens"] for r in rows} == {"a1": 5, "a2": 0}

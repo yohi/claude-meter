@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS requests (
     service_tier TEXT,
     speed TEXT,
     inference_geo TEXT,
+    message_id TEXT,
     response_time_ms INTEGER,
     cost_usd REAL,
     prompt_text TEXT,
@@ -151,6 +152,7 @@ _REQUESTS_EXTENDED_COLUMNS: tuple[tuple[str, str], ...] = (
     ("service_tier", "TEXT"),
     ("speed", "TEXT"),
     ("inference_geo", "TEXT"),
+    ("message_id", "TEXT"),
 )
 
 
@@ -178,3 +180,5 @@ def migrate_requests(conn: sqlite3.Connection) -> None:
                     raise
                 # Another process already added this column concurrently; the
                 # migration is idempotent by design, so treat this as a no-op.
+                pass
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_message_id ON requests(message_id)")

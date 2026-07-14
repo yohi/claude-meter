@@ -353,23 +353,46 @@ def parse_incremental(config: Config, *, reparse: bool = False) -> int:
                     cache_1h = cache_creation.get("ephemeral_1h_input_tokens", 0) or 0
                     web_search = server_tool_use.get("web_search_requests", 0) or 0
                     web_fetch = server_tool_use.get("web_fetch_requests", 0) or 0
+                    message_id = message.get("id")
+                    if not isinstance(message_id, str) or not message_id:
+                        message_id = None
                     if isinstance(uuid, str) and uuid:
                         request_id = uuid
                     else:
                         request_id = f"missing-{file_path.name}-{line_no}"
+                    session_id = record.get("sessionId", "")
+                    input_tokens = usage.get("input_tokens", 0) or 0
+                    output_tokens = usage.get("output_tokens", 0) or 0
+                    cache_creation_input_tokens = (
+                        usage.get("cache_creation_input_tokens", 0) or 0
+                    )
+                    cache_read_input_tokens = usage.get("cache_read_input_tokens", 0) or 0
+                    if not _claim_message_id(conn, message_id, session_id, request_id):
+                        # This assistant line is a content-block split (e.g. one of
+                        # several parallel tool_use blocks) of an API response
+                        # already billed via an earlier transcript line sharing the
+                        # same message_id. Zero its usage so the single underlying
+                        # Bedrock invocation is not counted multiple times.
+                        input_tokens = 0
+                        output_tokens = 0
+                        cache_creation_input_tokens = 0
+                        cache_read_input_tokens = 0
+                        cache_5m = 0
+                        cache_1h = 0
+                        web_search = 0
+                        web_fetch = 0
                     rec = UsageRecord(
                         timestamp=timestamp,
-                        session_id=record.get("sessionId", ""),
+                        session_id=session_id,
                         request_id=request_id,
                         project=project,
                         git_repository=repo,
                         model=model,
                         region=config.claude.region,
-                        input_tokens=usage.get("input_tokens", 0) or 0,
-                        output_tokens=usage.get("output_tokens", 0) or 0,
-                        cache_creation_input_tokens=usage.get("cache_creation_input_tokens", 0)
-                        or 0,
-                        cache_read_input_tokens=usage.get("cache_read_input_tokens", 0) or 0,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        cache_creation_input_tokens=cache_creation_input_tokens,
+                        cache_read_input_tokens=cache_read_input_tokens,
                         cache_creation_5m_tokens=cache_5m,
                         cache_creation_1h_tokens=cache_1h,
                         web_search_requests=web_search,
@@ -377,6 +400,7 @@ def parse_incremental(config: Config, *, reparse: bool = False) -> int:
                         service_tier=usage.get("service_tier") or None,
                         speed=usage.get("speed") or None,
                         inference_geo=usage.get("inference_geo") or None,
+                        message_id=message_id,
                         response_time_ms=response_time_ms,
                         prompt_text=prompt_text,
                         response_text=response_text,
@@ -396,6 +420,43 @@ def parse_incremental(config: Config, *, reparse: bool = False) -> int:
     return inserted
 
 
+def _claim_message_id(
+    conn: sqlite3.Connection, message_id: str | None, session_id: str, request_id: str
+) -> bool:
+    """Return True when this (session_id, request_id) row should carry the real
+    token usage for ``message_id``.
+
+    Claude Code sometimes splits a single real API response (one Bedrock
+    invocation, one Anthropic ``message.id``) across multiple ``assistant``
+    JSONL lines -- e.g. one line per parallel ``tool_use`` block -- and every
+    split line carries an identical copy of that single response's ``usage``
+    block. Treating each line as its own billing event would multiply the real
+    cost by the number of split lines. Only the first-ever-inserted row for a
+    given ``message_id`` (by insertion order, i.e. lowest ``id``) is primary/
+    billable; the caller must zero usage on later rows sharing the same
+    ``message_id``.
+
+    ``message_id`` is ``None`` for records predating this field (older
+    ClaudeCode versions) or otherwise missing it; deduplication is skipped in
+    that case (always returns True) rather than risk zeroing usage that cannot
+    be proven duplicate.
+
+    Idempotent: re-processing an already-inserted primary row (matching
+    session_id/request_id) still returns True, so incremental re-runs and
+    ``--reparse`` never flip a row from primary to zeroed or vice versa.
+    """
+    if message_id is None:
+        return True
+    row = conn.execute(
+        "SELECT session_id, request_id FROM requests WHERE message_id = ? "
+        "ORDER BY id LIMIT 1",
+        (message_id,),
+    ).fetchone()
+    if row is None:
+        return True
+    return bool(row["session_id"] == session_id and row["request_id"] == request_id)
+
+
 def _insert_usage(conn: sqlite3.Connection, rec: UsageRecord) -> bool:
     existing = conn.execute(
         "SELECT 1 FROM requests WHERE session_id = ? AND request_id = ?",
@@ -408,8 +469,9 @@ def _insert_usage(conn: sqlite3.Connection, rec: UsageRecord) -> bool:
             cache_read_input_tokens, response_time_ms, cost_usd, prompt_text,
             response_text, source_file,
             cache_creation_5m_tokens, cache_creation_1h_tokens,
-            web_search_requests, web_fetch_requests, service_tier, speed, inference_geo
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            web_search_requests, web_fetch_requests, service_tier, speed, inference_geo,
+            message_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id, request_id) DO UPDATE SET
             timestamp=excluded.timestamp,
             project=excluded.project,
@@ -431,7 +493,8 @@ def _insert_usage(conn: sqlite3.Connection, rec: UsageRecord) -> bool:
             web_fetch_requests=excluded.web_fetch_requests,
             service_tier=excluded.service_tier,
             speed=excluded.speed,
-            inference_geo=excluded.inference_geo""",
+            inference_geo=excluded.inference_geo,
+            message_id=excluded.message_id""",
         (
             rec.timestamp.isoformat(),
             rec.session_id,
@@ -456,6 +519,7 @@ def _insert_usage(conn: sqlite3.Connection, rec: UsageRecord) -> bool:
             rec.service_tier,
             rec.speed,
             rec.inference_geo,
+            rec.message_id,
         ),
     )
     return existing is None

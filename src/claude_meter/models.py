@@ -25,6 +25,7 @@ class UsageRecord(BaseModel):
     service_tier: str | None = None
     speed: str | None = None
     inference_geo: str | None = None
+    message_id: str | None = None
     response_time_ms: int | None = None
     cost_usd: float | None = None
     prompt_text: str | None = None
