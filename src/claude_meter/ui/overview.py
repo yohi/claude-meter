@@ -12,6 +12,7 @@ import streamlit as st
 from claude_meter.db import get_connection
 from claude_meter.config import Config, load_config, resolve_tzinfo
 from claude_meter.model_normalizer import display_model_name
+from claude_meter.version import get_app_version
 from claude_meter.report import (
     ModelRow,
     ReconciliationReport,
@@ -284,6 +285,7 @@ def _cached_build_report(
 def render() -> None:
     config = load_config()
     st.title("claude-meter Overview")
+    st.caption(f"Version: {get_app_version()}")
     period = st.selectbox("Period", ["Today", _LABEL_LAST_7_DAYS, _LABEL_LAST_30_DAYS, "Custom"])
     resolved_tz = resolve_tzinfo(config.ui.timezone)
     tz_modifiers = _tz_offset_modifiers(resolved_tz)
