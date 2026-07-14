@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.8.0](https://github.com/yohi/claude-meter/compare/v0.7.1...v0.8.0) (2026-07-14)
+
+
+### Features
+
+* **ui:** Overviewページにgitタグ/コミットハッシュのバージョン表示を追加 ([8df2ecd](https://github.com/yohi/claude-meter/commit/8df2ecd58f7b2de47aa24a62104be3fcb284de2c))
+* **ui:** Overviewページにgitタグ/コミットハッシュのバージョン表示を追加 ([74594b7](https://github.com/yohi/claude-meter/commit/74594b7c174b716f4f1b33b2e47bef5bf8d9dd2d))
+
+
+### Bug Fixes
+
+* input_tsがNULLの行で構造キーが衝突し誤って重複判定される問題を修正 ([cd3c09b](https://github.com/yohi/claude-meter/commit/cd3c09b4e7b585dd33d0a235fccfe03062e26422))
+* message_id重複行のresponse_time_ms未クリアを修正 ([d119bd4](https://github.com/yohi/claude-meter/commit/d119bd4d1041c9a5cfae8b1fdeef9db4fbfd8f41))
+* message.id欠如ログの分割行usage二重計上を構造的dedupで解消 ([f40f99a](https://github.com/yohi/claude-meter/commit/f40f99af442f7ef260e1c3e19edbb9f882cc2847))
+* message.id欠如ログの分割行usage二重計上を構造的dedupで解消 ([e1938ec](https://github.com/yohi/claude-meter/commit/e1938ec33f035a45333060a826d0332050a3e911))
+* 分割assistant行のoutput過小計上を解消(message.id内で最大usageを集約) ([0cc2019](https://github.com/yohi/claude-meter/commit/0cc201996344283534b00eff68a98714dd1c68fb))
+* 分割行の重複UPDATEでresponse_time_msをNULL化 ([8b16c0e](https://github.com/yohi/claude-meter/commit/8b16c0ef6909565254946a41e6ce818536d10a65))
+
+
+### Performance Improvements
+
+* message_id+is_duplicateの複合インデックスを追加 ([834f67f](https://github.com/yohi/claude-meter/commit/834f67f8ff7e02cc4d29343eb99e58a2e6229f30))
+
 ## [0.7.1](https://github.com/yohi/claude-meter/compare/v0.7.0...v0.7.1) (2026-07-14)
 
 
