@@ -175,6 +175,14 @@ def test_migrate_requests_adds_columns_idempotently(tmp_path: Path) -> None:
         migrate_requests(conn)
         assert _requests_columns(conn) == columns_after_first
 
+        # The (message_id, is_duplicate) composite index used by
+        # _collapse_split_messages is created exactly once, idempotently.
+        index_rows = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='requests' "
+            "AND name='idx_requests_message_id_dup'"
+        ).fetchall()
+        assert len(index_rows) == 1
+
         # Existing rows survive the migration; new columns default to NULL.
         row = conn.execute(
             "SELECT input_tokens, cache_creation_5m_tokens, service_tier "
@@ -243,5 +251,6 @@ def test_init_db_on_legacy_database_without_message_id_column(tmp_path: Path) ->
             )
         }
         assert "idx_requests_message_id" in indexes
+        assert "idx_requests_message_id_dup" in indexes
     finally:
         conn.close()

@@ -996,3 +996,551 @@ def test_concurrent_processes_do_not_double_count_shared_message_id(
     # The retained usage must equal exactly the single invocation's tokens.
     assert sum(row["input_tokens"] for row in rows) == 100
     assert sum(row["output_tokens"] for row in rows) == 50
+
+
+def _write_jsonl(path: Path, records: list[dict[str, object]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "".join(json.dumps(r) + "\n" for r in records), encoding="utf-8"
+    )
+
+
+def test_split_without_message_id_dedups_by_structural_key(temp_home: Path) -> None:
+    """Older ClaudeCode transcripts (no message.id) split one API response across
+    several consecutive assistant lines that each carry an identical copy of the
+    single response's usage block. With no message.id to key on, dedup falls back
+    to the structural key (session_id, source_file, input_ts, usage 8-tuple): all
+    split lines share the triggering input timestamp (no user record between them)
+    and identical usage, so only the first is billable and the rest are zeroed."""
+    session_id = "s-split-noid"
+    usage = {
+        "input_tokens": 2,
+        "output_tokens": 1113,
+        "cache_creation_input_tokens": 3449,
+        "cache_read_input_tokens": 76079,
+    }
+    user_rec = {
+        "type": "user",
+        "uuid": "u1",
+        "parentUuid": None,
+        "timestamp": "2026-07-09T02:15:00.000Z",
+        "cwd": "/x",
+        "sessionId": session_id,
+        "message": {"role": "user", "content": "do a bunch of things"},
+    }
+    # One response, three assistant lines (thinking / text / tool_use), NO message.id,
+    # NO intervening user record -> all share the same triggering input_ts.
+    def asst(uuid: str, parent: str, ts: str, block: dict[str, object]) -> dict[str, object]:
+        return {
+            "type": "assistant",
+            "uuid": uuid,
+            "parentUuid": parent,
+            "timestamp": ts,
+            "cwd": "/x",
+            "sessionId": session_id,
+            "message": {"model": "claude-sonnet-5", "content": [block], "usage": usage},
+        }
+
+    records: list[dict[str, object]] = [
+        user_rec,
+        asst("a1", "u1", "2026-07-09T02:15:05.881Z", {"type": "thinking", "thinking": "hmm"}),
+        asst("a2", "a1", "2026-07-09T02:15:06.884Z", {"type": "text", "text": "ok"}),
+        asst("a3", "a2", "2026-07-09T02:15:09.554Z",
+             {"type": "tool_use", "id": "t1", "name": "bash", "input": {}}),
+    ]
+    config = load_config()
+    _write_jsonl(temp_home / ".claude" / "projects" / "demo" / f"{session_id}.jsonl", records)
+    init_db(config.storage.db_path)
+    inserted = parse_incremental(config)
+    assert inserted == 3  # all three transcript lines kept as distinct rows
+
+    with closing(get_connection(config.storage.db_path)) as conn:
+        rows = conn.execute(
+            "SELECT request_id, message_id, is_duplicate, input_tokens, output_tokens, "
+            "cache_creation_input_tokens, cache_read_input_tokens "
+            "FROM requests WHERE session_id = ? ORDER BY request_id",
+            (session_id,),
+        ).fetchall()
+    assert len(rows) == 3
+    assert all(r["message_id"] is None for r in rows)
+    # Exactly one row keeps the usage; the underlying single invocation is billed once.
+    totals = {
+        "input_tokens": sum(r["input_tokens"] for r in rows),
+        "output_tokens": sum(r["output_tokens"] for r in rows),
+        "cache_creation_input_tokens": sum(r["cache_creation_input_tokens"] for r in rows),
+        "cache_read_input_tokens": sum(r["cache_read_input_tokens"] for r in rows),
+    }
+    assert totals == usage
+    # First-seen line (a1) is primary; a2/a3 are marked duplicate and zeroed.
+    by_id = {r["request_id"]: r for r in rows}
+    assert by_id["a1"]["is_duplicate"] == 0
+    assert by_id["a1"]["input_tokens"] == 2
+    assert by_id["a2"]["is_duplicate"] == 1
+    assert by_id["a3"]["is_duplicate"] == 1
+    assert by_id["a2"]["cache_read_input_tokens"] == 0
+    assert by_id["a3"]["cache_read_input_tokens"] == 0
+
+
+def test_split_without_message_id_zeroes_response_time_ms_on_duplicate(
+    temp_home: Path,
+) -> None:
+    """Regression test: duplicate rows collapsed by ``_collapse_split_messages``
+    must have ``response_time_ms`` nulled out alongside the token/cost columns.
+    Each split line carries its OWN transcript timestamp (and thus its own,
+    distinct ``response_time_ms`` relative to the shared triggering input), so
+    leaving it un-zeroed would let a duplicate row's response time leak into
+    ``AVG(response_time_ms)`` aggregates (ui/overview.py) even though the row's
+    usage/cost has already been zeroed as non-billable."""
+    session_id = "s-split-rtms"
+    usage = {"input_tokens": 2, "output_tokens": 10, "cache_read_input_tokens": 500}
+    records: list[dict[str, object]] = [
+        {
+            "type": "user", "uuid": "u1", "parentUuid": None,
+            "timestamp": "2026-07-09T02:15:00.000Z", "cwd": "/x",
+            "sessionId": session_id,
+            "message": {"role": "user", "content": "do a bunch of things"},
+        },
+        {
+            "type": "assistant", "uuid": "a1", "parentUuid": "u1",
+            "timestamp": "2026-07-09T02:15:05.000Z", "cwd": "/x",
+            "sessionId": session_id,
+            "message": {"model": "claude-sonnet-5",
+                        "content": [{"type": "text", "text": "ok"}], "usage": usage},
+        },
+        {
+            # Same response, split into a second line 3s later; no user record
+            # between them -> collapsed as a duplicate of a1.
+            "type": "assistant", "uuid": "a2", "parentUuid": "a1",
+            "timestamp": "2026-07-09T02:15:08.000Z", "cwd": "/x",
+            "sessionId": session_id,
+            "message": {"model": "claude-sonnet-5",
+                        "content": [{"type": "tool_use", "id": "t", "name": "b", "input": {}}],
+                        "usage": usage},
+        },
+    ]
+    config = load_config()
+    _write_jsonl(temp_home / ".claude" / "projects" / "demo" / f"{session_id}.jsonl", records)
+    init_db(config.storage.db_path)
+    assert parse_incremental(config) == 2
+
+    with closing(get_connection(config.storage.db_path)) as conn:
+        rows = conn.execute(
+            "SELECT request_id, is_duplicate, response_time_ms FROM requests "
+            "WHERE session_id = ? ORDER BY request_id",
+            (session_id,),
+        ).fetchall()
+    by_id = {r["request_id"]: r for r in rows}
+    # Keeper: not a duplicate, keeps its real (non-null) response time.
+    assert by_id["a1"]["is_duplicate"] == 0
+    assert by_id["a1"]["response_time_ms"] == 5000
+    # Duplicate: usage already zeroed elsewhere; response_time_ms must be NULL
+    # too, so it cannot pollute AVG(response_time_ms) aggregates.
+    assert by_id["a2"]["is_duplicate"] == 1
+    assert by_id["a2"]["response_time_ms"] is None
+
+
+def test_null_input_ts_never_merges_rows_before_first_user_record(
+    temp_home: Path,
+) -> None:
+    """Regression test: when a transcript's assistant lines appear before ANY
+    ``user`` record with a parseable timestamp, ``input_ts`` stays NULL for all
+    of them. NULL cannot discriminate distinct turns (unlike a real timestamp,
+    every such row would share the exact same NULL value), so
+    ``_collapse_split_messages`` must fall back to each row's own ``id`` and
+    never collapse these rows -- even when they coincidentally share an
+    identical usage 8-tuple. Silently zeroing a real, billable request here
+    would be far worse than missing a split-line collapse in this narrow
+    window."""
+    session_id = "s-null-input-ts"
+    usage = {"input_tokens": 4, "output_tokens": 8, "cache_read_input_tokens": 300}
+    records: list[dict[str, object]] = [
+        {
+            # No preceding user record at all -> last_input_ts is None here.
+            "type": "assistant", "uuid": "a1", "parentUuid": None,
+            "timestamp": "2026-07-09T02:15:05.000Z", "cwd": "/x",
+            "sessionId": session_id,
+            "message": {"model": "claude-sonnet-5",
+                        "content": [{"type": "text", "text": "one"}], "usage": usage},
+        },
+        {
+            # A second, genuinely distinct assistant record: still no user record
+            # has appeared, so last_input_ts is STILL None. Coincidentally
+            # identical usage to a1.
+            "type": "assistant", "uuid": "a2", "parentUuid": "a1",
+            "timestamp": "2026-07-09T02:15:20.000Z", "cwd": "/x",
+            "sessionId": session_id,
+            "message": {"model": "claude-sonnet-5",
+                        "content": [{"type": "text", "text": "two"}], "usage": usage},
+        },
+    ]
+    config = load_config()
+    _write_jsonl(temp_home / ".claude" / "projects" / "demo" / f"{session_id}.jsonl", records)
+    init_db(config.storage.db_path)
+    assert parse_incremental(config) == 2
+
+    with closing(get_connection(config.storage.db_path)) as conn:
+        rows = conn.execute(
+            "SELECT request_id, is_duplicate, input_tokens FROM requests "
+            "WHERE session_id = ? ORDER BY request_id",
+            (session_id,),
+        ).fetchall()
+    # Neither row is flagged as a duplicate; both retain full usage.
+    assert {r["request_id"]: (r["is_duplicate"], r["input_tokens"]) for r in rows} == {
+        "a1": (0, 4),
+        "a2": (0, 4),
+    }
+
+
+def test_structural_dedup_does_not_merge_distinct_turns_with_same_usage(
+    temp_home: Path,
+) -> None:
+    """Two SEPARATE responses (each its own turn, separated by a tool_result user
+    record) that coincidentally share an identical usage 8-tuple must NOT be
+    merged: the intervening user record advances the triggering input_ts, giving
+    them distinct structural keys. This is the safety gate against false merges."""
+    session_id = "s-distinct"
+    usage = {"input_tokens": 5, "output_tokens": 7, "cache_read_input_tokens": 111}
+    records: list[dict[str, object]] = [
+        {
+            "type": "user", "uuid": "u1", "parentUuid": None,
+            "timestamp": "2026-07-09T02:15:00.000Z", "cwd": "/x",
+            "sessionId": session_id,
+            "message": {"role": "user", "content": "first"},
+        },
+        {
+            "type": "assistant", "uuid": "a1", "parentUuid": "u1",
+            "timestamp": "2026-07-09T02:15:05.000Z", "cwd": "/x",
+            "sessionId": session_id,
+            "message": {"model": "claude-sonnet-5",
+                        "content": [{"type": "text", "text": "one"}], "usage": usage},
+        },
+        {
+            # tool_result advances last_input_ts -> next assistant is a new turn
+            "type": "user", "uuid": "tr1", "parentUuid": "a1",
+            "timestamp": "2026-07-09T02:15:10.000Z", "cwd": "/x",
+            "sessionId": session_id,
+            "message": {"role": "user",
+                        "content": [{"type": "tool_result", "tool_use_id": "t", "content": "ok"}]},
+        },
+        {
+            "type": "assistant", "uuid": "a2", "parentUuid": "tr1",
+            "timestamp": "2026-07-09T02:15:15.000Z", "cwd": "/x",
+            "sessionId": session_id,
+            "message": {"model": "claude-sonnet-5",
+                        "content": [{"type": "text", "text": "two"}], "usage": usage},
+        },
+    ]
+    config = load_config()
+    _write_jsonl(temp_home / ".claude" / "projects" / "demo" / f"{session_id}.jsonl", records)
+    init_db(config.storage.db_path)
+    parse_incremental(config)
+
+    with closing(get_connection(config.storage.db_path)) as conn:
+        rows = conn.execute(
+            "SELECT request_id, is_duplicate, input_tokens FROM requests "
+            "WHERE session_id = ? ORDER BY request_id",
+            (session_id,),
+        ).fetchall()
+    # Neither is a duplicate; both retain full usage.
+    assert {r["request_id"]: (r["is_duplicate"], r["input_tokens"]) for r in rows} == {
+        "a1": (0, 5),
+        "a2": (0, 5),
+    }
+
+
+def test_structural_dedup_idempotent_across_reparse(temp_home: Path) -> None:
+    """Re-running parse_incremental and a full --reparse must not flip the keeper
+    nor re-inflate the zeroed duplicate."""
+    session_id = "s-split-idem"
+    usage = {"input_tokens": 9, "output_tokens": 40, "cache_read_input_tokens": 5000}
+    records: list[dict[str, object]] = [
+        {
+            "type": "user", "uuid": "u1", "parentUuid": None,
+            "timestamp": "2026-07-09T02:15:00.000Z", "cwd": "/x",
+            "sessionId": session_id,
+            "message": {"role": "user", "content": "go"},
+        },
+        {
+            "type": "assistant", "uuid": "a1", "parentUuid": "u1",
+            "timestamp": "2026-07-09T02:15:05.000Z", "cwd": "/x",
+            "sessionId": session_id,
+            "message": {"model": "m",
+                        "content": [{"type": "text", "text": "x"}], "usage": usage},
+        },
+        {
+            "type": "assistant", "uuid": "a2", "parentUuid": "a1",
+            "timestamp": "2026-07-09T02:15:06.000Z", "cwd": "/x",
+            "sessionId": session_id,
+            "message": {"model": "m",
+                        "content": [{"type": "tool_use", "id": "t", "name": "b", "input": {}}],
+                        "usage": usage},
+        },
+    ]
+    config = load_config()
+    _write_jsonl(temp_home / ".claude" / "projects" / "demo" / f"{session_id}.jsonl", records)
+    init_db(config.storage.db_path)
+    assert parse_incremental(config) == 2
+    assert parse_incremental(config, reparse=True) == 2
+
+    with closing(get_connection(config.storage.db_path)) as conn:
+        rows = conn.execute(
+            "SELECT request_id, input_tokens FROM requests WHERE session_id = ? "
+            "ORDER BY request_id",
+            (session_id,),
+        ).fetchall()
+    assert {r["request_id"]: r["input_tokens"] for r in rows} == {"a1": 9, "a2": 0}
+
+
+
+def test_split_message_id_keeps_complete_max_output(temp_home: Path) -> None:
+    """Split assistant lines share a message.id and identical input/cache usage, but
+    output_tokens GROWS across lines (the complete count appears only on the last
+    line). The billable primary row must carry the MAX (complete) output, not the
+    first line's partial output, and the response must still be billed exactly once."""
+    session_id = "sess-grow"
+
+    def line(uuid: str, parent: str | None, ts: str, out: int, block: dict[str, object]) -> dict[str, object]:
+        return {
+            "type": "assistant", "uuid": uuid, "parentUuid": parent,
+            "timestamp": ts, "cwd": "/x", "sessionId": session_id,
+            "message": {
+                "id": "msg_bdrk_grow", "model": "claude-sonnet-4-6",
+                "content": [block],
+                "usage": {
+                    "input_tokens": 131, "output_tokens": out,
+                    "cache_creation_input_tokens": 8470,
+                    "cache_read_input_tokens": 60221,
+                },
+            },
+        }
+
+    records: list[dict[str, object]] = [
+        line("a1", None, "2026-07-09T02:15:05.100Z", 4, {"type": "thinking", "thinking": "..."}),
+        line("a2", "a1", "2026-07-09T02:15:05.200Z", 4, {"type": "text", "text": "answer"}),
+        line("a3", "a2", "2026-07-09T02:15:05.300Z", 216,
+             {"type": "tool_use", "id": "t1", "name": "bash", "input": {}}),
+    ]
+    config = load_config()
+    _write_jsonl(temp_home / ".claude" / "projects" / "demo" / f"{session_id}.jsonl", records)
+    init_db(config.storage.db_path)
+    assert parse_incremental(config) == 3
+
+    def snapshot() -> dict[str, sqlite3.Row]:
+        with closing(get_connection(config.storage.db_path)) as conn:
+            rows = conn.execute(
+                "SELECT request_id, input_tokens, output_tokens, "
+                "cache_creation_input_tokens, cache_read_input_tokens "
+                "FROM requests WHERE session_id = ? ORDER BY request_id",
+                (session_id,),
+            ).fetchall()
+        return {r["request_id"]: r for r in rows}
+
+    by_id = snapshot()
+    assert len(by_id) == 3
+    # The single response is billed once with its COMPLETE usage: max output (216),
+    # not the first line's partial 4, and not the naive sum 4+4+216=224.
+    assert sum(r["output_tokens"] for r in by_id.values()) == 216
+    assert sum(r["input_tokens"] for r in by_id.values()) == 131
+    assert sum(r["cache_read_input_tokens"] for r in by_id.values()) == 60221
+    assert sum(r["cache_creation_input_tokens"] for r in by_id.values()) == 8470
+    # Primary (first-inserted a1) carries the merged max usage; a2/a3 are zeroed.
+    assert by_id["a1"]["output_tokens"] == 216
+    assert by_id["a1"]["input_tokens"] == 131
+    assert by_id["a2"]["output_tokens"] == 0
+    assert by_id["a3"]["output_tokens"] == 0
+    assert by_id["a3"]["cache_read_input_tokens"] == 0
+
+    # Idempotent across --reparse: the max re-accumulates to 216, not the partial 4.
+    assert parse_incremental(config, reparse=True) == 3
+    by_id2 = snapshot()
+    assert by_id2["a1"]["output_tokens"] == 216
+    assert by_id2["a2"]["output_tokens"] == 0
+    assert by_id2["a3"]["output_tokens"] == 0
+    assert sum(r["output_tokens"] for r in by_id2.values()) == 216
+
+
+def test_message_id_duplicate_zeroes_response_time_ms(temp_home: Path) -> None:
+    """Regression test: a message_id-duplicate row (a content-block split sharing a
+    real ``message.id`` with an earlier primary row) must have ``response_time_ms``
+    nulled out alongside its zeroed token/cost columns. Each split line carries its
+    OWN transcript timestamp (hence its own ``response_time_ms`` relative to the
+    shared triggering input), so leaving it un-zeroed would let a non-billable
+    duplicate row's response time leak into ``AVG(response_time_ms)`` aggregates
+    (ui/overview.py), whose query has no ``is_duplicate`` filter."""
+    projects_dir = temp_home / ".claude" / "projects" / "demo"
+    projects_dir.mkdir(parents=True)
+    session_id = "sess-split-rtms-id"
+    usage_block = {
+        "input_tokens": 2,
+        "output_tokens": 1113,
+        "cache_creation_input_tokens": 3449,
+        "cache_read_input_tokens": 76079,
+    }
+    records = [
+        {
+            "type": "user",
+            "uuid": "u1",
+            "parentUuid": None,
+            "timestamp": "2026-07-09T02:15:00.000Z",
+            "cwd": "/x",
+            "sessionId": session_id,
+            "message": {"role": "user", "content": "do a bunch of things"},
+        },
+        {
+            "type": "assistant",
+            "uuid": "a1",
+            "parentUuid": "u1",
+            "timestamp": "2026-07-09T02:15:05.000Z",
+            "cwd": "/x",
+            "sessionId": session_id,
+            "message": {
+                "id": "msg_bdrk_dup1",
+                "model": "claude-sonnet-5",
+                "content": [{"type": "tool_use", "id": "t1", "name": "bash", "input": {}}],
+                "usage": usage_block,
+            },
+        },
+        {
+            "type": "assistant",
+            "uuid": "a2",
+            "parentUuid": "a1",
+            "timestamp": "2026-07-09T02:15:08.000Z",
+            "cwd": "/x",
+            "sessionId": session_id,
+            "message": {
+                "id": "msg_bdrk_dup1",
+                "model": "claude-sonnet-5",
+                "content": [{"type": "tool_use", "id": "t2", "name": "bash", "input": {}}],
+                "usage": usage_block,
+            },
+        },
+    ]
+    (projects_dir / "s-split-id.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in records), encoding="utf-8"
+    )
+
+    config = load_config()
+    init_db(config.storage.db_path)
+    assert parse_incremental(config) == 2
+
+    with closing(get_connection(config.storage.db_path)) as conn:
+        rows = conn.execute(
+            "SELECT request_id, message_id, input_tokens, output_tokens, "
+            "cache_creation_input_tokens, cache_read_input_tokens, response_time_ms "
+            "FROM requests WHERE session_id = ? ORDER BY request_id",
+            (session_id,),
+        ).fetchall()
+    by_id = {r["request_id"]: r for r in rows}
+    assert len(by_id) == 2
+    assert by_id["a1"]["message_id"] == "msg_bdrk_dup1"
+    assert by_id["a2"]["message_id"] == "msg_bdrk_dup1"
+    # Primary (first-seen a1) keeps its real usage AND its own response_time_ms
+    # (02:15:05 - 02:15:00 == 5s); the fix must not touch the primary row.
+    assert by_id["a1"]["input_tokens"] == 2
+    assert by_id["a1"]["response_time_ms"] == 5000
+    # Duplicate (a2): usage already zeroed, and response_time_ms must be NULL too so
+    # it cannot pollute AVG(response_time_ms) aggregates (no is_duplicate filter there).
+    assert by_id["a2"]["input_tokens"] == 0
+    assert by_id["a2"]["output_tokens"] == 0
+    assert by_id["a2"]["cache_creation_input_tokens"] == 0
+    assert by_id["a2"]["cache_read_input_tokens"] == 0
+    assert by_id["a2"]["response_time_ms"] is None
+
+
+def test_split_without_message_id_dedup_key_includes_extended_usage_fields(
+    temp_home: Path,
+) -> None:
+    """Regression test: the structural dedup key in ``_collapse_split_messages`` must
+    include ALL of the extended usage fields it later zeroes -- the cache_creation
+    5m/1h split tokens and the web_search/web_fetch server-tool counts -- not just
+    the four basic input/output/cache_creation_input/cache_read_input columns. Two
+    genuinely distinct requests that share the same session/source_file/input_ts and
+    an identical basic-4 usage tuple but differ in ANY one of these four extended
+    fields are NOT split lines of one response and must NOT be collapsed into each
+    other.
+
+    Each pair below shares everything the OLD 4-field key inspected and differs in
+    exactly ONE extended field, so if that field were still missing from the key the
+    pair would wrongly collapse (second row flagged is_duplicate=1 and zeroed). All
+    rows must stay is_duplicate=0."""
+    base = {
+        "input_tokens": 5,
+        "output_tokens": 7,
+        "cache_creation_input_tokens": 11,
+        "cache_read_input_tokens": 13,
+    }
+
+    def asst(
+        session_id: str, uuid: str, parent: str, ts: str, extra: dict[str, object]
+    ) -> dict[str, object]:
+        usage: dict[str, object] = {**base, **extra}
+        return {
+            "type": "assistant",
+            "uuid": uuid,
+            "parentUuid": parent,
+            "timestamp": ts,
+            "cwd": "/x",
+            "sessionId": session_id,
+            "message": {
+                "model": "claude-sonnet-5",
+                "content": [{"type": "text", "text": "x"}],
+                "usage": usage,
+            },
+        }
+
+    # Four independent sessions, each a pair differing in exactly one extended field.
+    cases: dict[str, tuple[dict[str, object], dict[str, object]]] = {
+        "s-ext-5m": (
+            {"cache_creation": {"ephemeral_5m_input_tokens": 100}},
+            {"cache_creation": {"ephemeral_5m_input_tokens": 200}},
+        ),
+        "s-ext-1h": (
+            {"cache_creation": {"ephemeral_1h_input_tokens": 100}},
+            {"cache_creation": {"ephemeral_1h_input_tokens": 200}},
+        ),
+        "s-ext-websearch": (
+            {"server_tool_use": {"web_search_requests": 1}},
+            {"server_tool_use": {"web_search_requests": 2}},
+        ),
+        "s-ext-webfetch": (
+            {"server_tool_use": {"web_fetch_requests": 1}},
+            {"server_tool_use": {"web_fetch_requests": 2}},
+        ),
+    }
+
+    config = load_config()
+    for session_id, (extra1, extra2) in cases.items():
+        records: list[dict[str, object]] = [
+            {
+                "type": "user", "uuid": f"{session_id}-u1", "parentUuid": None,
+                "timestamp": "2026-07-09T02:15:00.000Z", "cwd": "/x",
+                "sessionId": session_id,
+                "message": {"role": "user", "content": "go"},
+            },
+            asst(session_id, f"{session_id}-a1", f"{session_id}-u1",
+                 "2026-07-09T02:15:05.000Z", extra1),
+            asst(session_id, f"{session_id}-a2", f"{session_id}-a1",
+                 "2026-07-09T02:15:06.000Z", extra2),
+        ]
+        _write_jsonl(
+            temp_home / ".claude" / "projects" / "demo" / f"{session_id}.jsonl", records
+        )
+
+    init_db(config.storage.db_path)
+    parse_incremental(config)
+
+    with closing(get_connection(config.storage.db_path)) as conn:
+        rows = conn.execute(
+            "SELECT session_id, request_id, is_duplicate, input_tokens FROM requests "
+            "WHERE message_id IS NULL ORDER BY session_id, request_id"
+        ).fetchall()
+    by_session: dict[str, list[sqlite3.Row]] = {}
+    for row in rows:
+        by_session.setdefault(row["session_id"], []).append(row)
+    # Every row across all four pairs must remain billable (not collapsed): the key
+    # now discriminates on the extended field each pair differs in.
+    for session_id in cases:
+        pair = by_session[session_id]
+        assert len(pair) == 2, session_id
+        assert all(r["is_duplicate"] == 0 for r in pair), session_id
+        assert all(r["input_tokens"] == 5 for r in pair), session_id

@@ -388,10 +388,26 @@ def parse_incremental(config: Config, *, reparse: bool = False) -> int:
                     try:
                         if not _claim_message_id(conn, message_id, session_id, request_id):
                             # This assistant line is a content-block split (e.g. one of
-                            # several parallel tool_use blocks) of an API response
-                            # already billed via an earlier transcript line sharing the
-                            # same message_id. Zero its usage so the single underlying
-                            # Bedrock invocation is not counted multiple times.
+                            # several parallel tool_use blocks) of an API response already
+                            # billed via an earlier transcript line sharing the same
+                            # message_id. The split lines carry identical input/cache usage
+                            # but a GROWING output_tokens (the complete count appears only
+                            # on the last line), so fold this line's usage into the primary
+                            # row via a component-wise max BEFORE zeroing it -- keeping only
+                            # the first (partial-output) line would under-count output.
+                            assert message_id is not None
+                            _merge_usage_into_primary(
+                                conn,
+                                message_id,
+                                input_tokens,
+                                output_tokens,
+                                cache_creation_input_tokens,
+                                cache_read_input_tokens,
+                                cache_5m,
+                                cache_1h,
+                                web_search,
+                                web_fetch,
+                            )
                             input_tokens = 0
                             output_tokens = 0
                             cache_creation_input_tokens = 0
@@ -400,6 +416,11 @@ def parse_incremental(config: Config, *, reparse: bool = False) -> int:
                             cache_1h = 0
                             web_search = 0
                             web_fetch = 0
+                            # This row's usage/cost is now zero, so its own
+                            # response_time_ms must not leak into AVG(response_time_ms)
+                            # aggregates (ui/overview.py has no is_duplicate filter);
+                            # mirror the message_id-NULL path in _collapse_split_messages.
+                            response_time_ms = None
                         rec = UsageRecord(
                             timestamp=timestamp,
                             session_id=session_id,
@@ -420,6 +441,7 @@ def parse_incremental(config: Config, *, reparse: bool = False) -> int:
                             speed=usage.get("speed") or None,
                             inference_geo=usage.get("inference_geo") or None,
                             message_id=message_id,
+                            input_ts=last_input_ts,
                             response_time_ms=response_time_ms,
                             prompt_text=prompt_text,
                             response_text=response_text,
@@ -448,7 +470,113 @@ def parse_incremental(config: Config, *, reparse: bool = False) -> int:
                 last_input_ts,
             )
             conn.commit()
+        _collapse_split_messages(conn)
     return inserted
+
+
+def _collapse_split_messages(conn: sqlite3.Connection) -> None:
+    """Zero the usage of duplicate rows from split assistant lines lacking a message.id.
+
+    Older ClaudeCode transcripts (and any assistant record missing ``message.id``)
+    split ONE API response across multiple consecutive ``assistant`` JSONL lines --
+    one per content block (thinking / text / each parallel ``tool_use``) -- and
+    every split line carries an identical copy of that single response's ``usage``
+    block. With no ``message.id`` to key on, ``_claim_message_id`` cannot dedup them
+    inline (it returns True for message_id=None), so they are collapsed here by a
+    structural key instead.
+
+    Structural key: (session_id, source_file, input_ts, usage 8-tuple). All split
+    lines of one response share the SAME triggering input timestamp (``input_ts`` --
+    no ``user`` record falls between them, so ``collector.last_input_ts`` never
+    advances) AND an identical usage 8-tuple. Two genuinely distinct API calls are
+    separated by a ``user`` record (a tool_result), which advances ``input_ts`` and
+    gives them different keys -- this is what prevents false merges (the DB stores
+    only ``assistant`` rows, so row adjacency alone cannot prove "no user between";
+    ``input_ts`` is the reliable turn discriminator). Within one key only the
+    lowest-``id`` row stays billable; the rest are zeroed and flagged.
+
+    ``input_ts`` is NULL until the first ``user`` record with a parseable timestamp
+    is seen for a file (e.g. a transcript that opens with an assistant record, or a
+    ``user`` record whose own timestamp failed to parse), so it cannot discriminate
+    turns in that window -- two genuinely distinct API calls could coincidentally
+    share an identical usage 8-tuple there and would otherwise collide on the same
+    key. To avoid silently zeroing a real, billable request, each ``input_ts IS
+    NULL`` row instead falls back to its own ``id`` as the turn component of the
+    key, so it is never merged with any other row (the safe failure mode is missing
+    a split-line collapse in this narrow window, not deleting real cost/usage data).
+
+    Scoped to ``message_id IS NULL``: rows with a real ``message.id`` are already
+    deduplicated inline by ``_claim_message_id`` and are never touched here.
+
+    Idempotent: zeroed rows carry ``is_duplicate = 1`` and are excluded from
+    re-grouping, so repeated ``collect`` runs never re-collapse them or flip the
+    keeper. ``_insert_usage`` resets ``is_duplicate`` to 0 on re-insert, so a row
+    whose full usage is restored (incremental re-read or ``--reparse``) is
+    re-collapsed deterministically to the same result.
+
+    Wrapped in ``BEGIN IMMEDIATE`` so concurrent collect/watch/ui processes sharing
+    the SQLite file serialise on this pass instead of racing (matching the
+    per-record atomicity contract used by the message_id path).
+    """
+    if conn.in_transaction:
+        conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        rows = conn.execute(
+            """SELECT id, session_id, source_file, input_ts,
+                      input_tokens, output_tokens,
+                      cache_creation_input_tokens, cache_read_input_tokens,
+                      cache_creation_5m_tokens, cache_creation_1h_tokens,
+                      web_search_requests, web_fetch_requests
+               FROM requests
+               WHERE message_id IS NULL AND is_duplicate = 0
+               ORDER BY session_id, source_file, input_ts, id"""
+        ).fetchall()
+        seen: set[tuple[object, ...]] = set()
+        duplicate_ids: list[int] = []
+        for row in rows:
+            input_ts = row["input_ts"]
+            key = (
+                row["session_id"],
+                row["source_file"],
+                # See docstring: NULL input_ts cannot discriminate turns, so fall
+                # back to this row's own id -- a value no other row can share --
+                # rather than risk merging two genuinely distinct API calls.
+                input_ts if input_ts is not None else row["id"],
+                row["input_tokens"],
+                row["output_tokens"],
+                row["cache_creation_input_tokens"],
+                row["cache_read_input_tokens"],
+                row["cache_creation_5m_tokens"],
+                row["cache_creation_1h_tokens"],
+                row["web_search_requests"],
+                row["web_fetch_requests"],
+            )
+            if key in seen:
+                duplicate_ids.append(row["id"])
+            else:
+                seen.add(key)
+        if duplicate_ids:
+            conn.executemany(
+                """UPDATE requests SET
+                       input_tokens = 0,
+                       output_tokens = 0,
+                       cache_creation_input_tokens = 0,
+                       cache_read_input_tokens = 0,
+                       cache_creation_5m_tokens = 0,
+                       cache_creation_1h_tokens = 0,
+                       web_search_requests = 0,
+                       web_fetch_requests = 0,
+                       cost_usd = 0.0,
+                       response_time_ms = NULL,
+                       is_duplicate = 1
+                   WHERE id = ?""",
+                [(dup_id,) for dup_id in duplicate_ids],
+            )
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
 
 
 def _claim_message_id(
@@ -460,12 +588,15 @@ def _claim_message_id(
     Claude Code sometimes splits a single real API response (one Bedrock
     invocation, one Anthropic ``message.id``) across multiple ``assistant``
     JSONL lines -- e.g. one line per parallel ``tool_use`` block -- and every
-    split line carries an identical copy of that single response's ``usage``
-    block. Treating each line as its own billing event would multiply the real
-    cost by the number of split lines. Only the first-ever-inserted row for a
-    given ``message_id`` (by insertion order, i.e. lowest ``id``) is primary/
-    billable; the caller must zero usage on later rows sharing the same
-    ``message_id``.
+    split line carries the same single response's ``usage``. Input and cache counts
+    are identical across the split, but ``output_tokens`` GROWS -- the complete
+    output count appears only on the last line. Treating each line as its own
+    billing event would multiply the real cost by the number of split lines. Only
+    the first-ever-inserted row for a given ``message_id`` (by insertion order, i.e.
+    lowest ``id``) is primary/billable; the caller folds each later line's usage
+    into that primary via a component-wise max (see ``_merge_usage_into_primary``)
+    and then zeroes the later row, so the primary carries the response's COMPLETE
+    usage and is billed exactly once.
 
     ``message_id`` is ``None`` for records predating this field (older
     ClaudeCode versions) or otherwise missing it; deduplication is skipped in
@@ -498,6 +629,61 @@ def _claim_message_id(
     return bool(row["session_id"] == session_id and row["request_id"] == request_id)
 
 
+def _merge_usage_into_primary(
+    conn: sqlite3.Connection,
+    message_id: str,
+    input_tokens: int,
+    output_tokens: int,
+    cache_creation_input_tokens: int,
+    cache_read_input_tokens: int,
+    cache_creation_5m_tokens: int,
+    cache_creation_1h_tokens: int,
+    web_search_requests: int,
+    web_fetch_requests: int,
+) -> None:
+    """Fold a split line's usage into the primary (lowest-id) row for its message_id.
+
+    Claude Code splits one API response across several ``assistant`` lines sharing a
+    ``message_id``. They carry identical input/cache usage but a GROWING
+    ``output_tokens`` -- the complete output count appears only on the last
+    content-block line. ``_claim_message_id`` keeps the FIRST line as primary, whose
+    output is still partial, so naively zeroing the later lines under-counts output
+    (the bug this fixes).
+
+    Before a duplicate line is zeroed, each usage component is folded into the
+    primary row via a component-wise ``max``, so the primary ends up carrying the
+    response's COMPLETE usage (max output, with input/cache unchanged since they are
+    constant across the split). ``max`` (not sum) is correct because every split
+    line reports the same single response's cumulative usage, not an increment.
+    ``cost_usd`` is reset to NULL so ``fill_missing_costs`` recomputes it from the
+    merged totals.
+    """
+    conn.execute(
+        """UPDATE requests SET
+               input_tokens = max(coalesce(input_tokens, 0), ?),
+               output_tokens = max(coalesce(output_tokens, 0), ?),
+               cache_creation_input_tokens = max(coalesce(cache_creation_input_tokens, 0), ?),
+               cache_read_input_tokens = max(coalesce(cache_read_input_tokens, 0), ?),
+               cache_creation_5m_tokens = max(coalesce(cache_creation_5m_tokens, 0), ?),
+               cache_creation_1h_tokens = max(coalesce(cache_creation_1h_tokens, 0), ?),
+               web_search_requests = max(coalesce(web_search_requests, 0), ?),
+               web_fetch_requests = max(coalesce(web_fetch_requests, 0), ?),
+               cost_usd = NULL
+           WHERE id = (SELECT min(id) FROM requests WHERE message_id = ?)""",
+        (
+            input_tokens,
+            output_tokens,
+            cache_creation_input_tokens,
+            cache_read_input_tokens,
+            cache_creation_5m_tokens,
+            cache_creation_1h_tokens,
+            web_search_requests,
+            web_fetch_requests,
+            message_id,
+        ),
+    )
+
+
 def _insert_usage(conn: sqlite3.Connection, rec: UsageRecord) -> bool:
     existing = conn.execute(
         "SELECT 1 FROM requests WHERE session_id = ? AND request_id = ?",
@@ -511,8 +697,8 @@ def _insert_usage(conn: sqlite3.Connection, rec: UsageRecord) -> bool:
             response_text, source_file,
             cache_creation_5m_tokens, cache_creation_1h_tokens,
             web_search_requests, web_fetch_requests, service_tier, speed, inference_geo,
-            message_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            message_id, input_ts
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id, request_id) DO UPDATE SET
             timestamp=excluded.timestamp,
             project=excluded.project,
@@ -535,7 +721,11 @@ def _insert_usage(conn: sqlite3.Connection, rec: UsageRecord) -> bool:
             service_tier=excluded.service_tier,
             speed=excluded.speed,
             inference_geo=excluded.inference_geo,
-            message_id=excluded.message_id""",
+            message_id=excluded.message_id,
+            input_ts=excluded.input_ts,
+            -- Re-inserting restores full usage from the transcript, so clear the
+            -- structural-dedup flag; _collapse_split_messages re-derives it.
+            is_duplicate=0""",
         (
             rec.timestamp.isoformat(),
             rec.session_id,
@@ -561,6 +751,7 @@ def _insert_usage(conn: sqlite3.Connection, rec: UsageRecord) -> bool:
             rec.speed,
             rec.inference_geo,
             rec.message_id,
+            rec.input_ts.isoformat() if rec.input_ts is not None else None,
         ),
     )
     return existing is None
