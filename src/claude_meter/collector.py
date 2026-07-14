@@ -485,10 +485,10 @@ def _collapse_split_messages(conn: sqlite3.Connection) -> None:
     inline (it returns True for message_id=None), so they are collapsed here by a
     structural key instead.
 
-    Structural key: (session_id, source_file, input_ts, usage 4-tuple). All split
+    Structural key: (session_id, source_file, input_ts, usage 8-tuple). All split
     lines of one response share the SAME triggering input timestamp (``input_ts`` --
     no ``user`` record falls between them, so ``collector.last_input_ts`` never
-    advances) AND an identical usage 4-tuple. Two genuinely distinct API calls are
+    advances) AND an identical usage 8-tuple. Two genuinely distinct API calls are
     separated by a ``user`` record (a tool_result), which advances ``input_ts`` and
     gives them different keys -- this is what prevents false merges (the DB stores
     only ``assistant`` rows, so row adjacency alone cannot prove "no user between";
@@ -499,7 +499,7 @@ def _collapse_split_messages(conn: sqlite3.Connection) -> None:
     is seen for a file (e.g. a transcript that opens with an assistant record, or a
     ``user`` record whose own timestamp failed to parse), so it cannot discriminate
     turns in that window -- two genuinely distinct API calls could coincidentally
-    share an identical usage 4-tuple there and would otherwise collide on the same
+    share an identical usage 8-tuple there and would otherwise collide on the same
     key. To avoid silently zeroing a real, billable request, each ``input_ts IS
     NULL`` row instead falls back to its own ``id`` as the turn component of the
     key, so it is never merged with any other row (the safe failure mode is missing
@@ -525,7 +525,9 @@ def _collapse_split_messages(conn: sqlite3.Connection) -> None:
         rows = conn.execute(
             """SELECT id, session_id, source_file, input_ts,
                       input_tokens, output_tokens,
-                      cache_creation_input_tokens, cache_read_input_tokens
+                      cache_creation_input_tokens, cache_read_input_tokens,
+                      cache_creation_5m_tokens, cache_creation_1h_tokens,
+                      web_search_requests, web_fetch_requests
                FROM requests
                WHERE message_id IS NULL AND is_duplicate = 0
                ORDER BY session_id, source_file, input_ts, id"""
@@ -545,6 +547,10 @@ def _collapse_split_messages(conn: sqlite3.Connection) -> None:
                 row["output_tokens"],
                 row["cache_creation_input_tokens"],
                 row["cache_read_input_tokens"],
+                row["cache_creation_5m_tokens"],
+                row["cache_creation_1h_tokens"],
+                row["web_search_requests"],
+                row["web_fetch_requests"],
             )
             if key in seen:
                 duplicate_ids.append(row["id"])

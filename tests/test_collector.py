@@ -1009,7 +1009,7 @@ def test_split_without_message_id_dedups_by_structural_key(temp_home: Path) -> N
     """Older ClaudeCode transcripts (no message.id) split one API response across
     several consecutive assistant lines that each carry an identical copy of the
     single response's usage block. With no message.id to key on, dedup falls back
-    to the structural key (session_id, source_file, input_ts, usage 4-tuple): all
+    to the structural key (session_id, source_file, input_ts, usage 8-tuple): all
     split lines share the triggering input timestamp (no user record between them)
     and identical usage, so only the first is billable and the rest are zeroed."""
     session_id = "s-split-noid"
@@ -1148,7 +1148,7 @@ def test_null_input_ts_never_merges_rows_before_first_user_record(
     every such row would share the exact same NULL value), so
     ``_collapse_split_messages`` must fall back to each row's own ``id`` and
     never collapse these rows -- even when they coincidentally share an
-    identical usage 4-tuple. Silently zeroing a real, billable request here
+    identical usage 8-tuple. Silently zeroing a real, billable request here
     would be far worse than missing a split-line collapse in this narrow
     window."""
     session_id = "s-null-input-ts"
@@ -1195,7 +1195,7 @@ def test_structural_dedup_does_not_merge_distinct_turns_with_same_usage(
     temp_home: Path,
 ) -> None:
     """Two SEPARATE responses (each its own turn, separated by a tool_result user
-    record) that coincidentally share an identical usage 4-tuple must NOT be
+    record) that coincidentally share an identical usage 8-tuple must NOT be
     merged: the intervening user record advances the triggering input_ts, giving
     them distinct structural keys. This is the safety gate against false merges."""
     session_id = "s-distinct"
@@ -1445,3 +1445,102 @@ def test_message_id_duplicate_zeroes_response_time_ms(temp_home: Path) -> None:
     assert by_id["a2"]["cache_creation_input_tokens"] == 0
     assert by_id["a2"]["cache_read_input_tokens"] == 0
     assert by_id["a2"]["response_time_ms"] is None
+
+
+def test_split_without_message_id_dedup_key_includes_extended_usage_fields(
+    temp_home: Path,
+) -> None:
+    """Regression test: the structural dedup key in ``_collapse_split_messages`` must
+    include ALL of the extended usage fields it later zeroes -- the cache_creation
+    5m/1h split tokens and the web_search/web_fetch server-tool counts -- not just
+    the four basic input/output/cache_creation_input/cache_read_input columns. Two
+    genuinely distinct requests that share the same session/source_file/input_ts and
+    an identical basic-4 usage tuple but differ in ANY one of these four extended
+    fields are NOT split lines of one response and must NOT be collapsed into each
+    other.
+
+    Each pair below shares everything the OLD 4-field key inspected and differs in
+    exactly ONE extended field, so if that field were still missing from the key the
+    pair would wrongly collapse (second row flagged is_duplicate=1 and zeroed). All
+    rows must stay is_duplicate=0."""
+    base = {
+        "input_tokens": 5,
+        "output_tokens": 7,
+        "cache_creation_input_tokens": 11,
+        "cache_read_input_tokens": 13,
+    }
+
+    def asst(
+        session_id: str, uuid: str, parent: str, ts: str, extra: dict[str, object]
+    ) -> dict[str, object]:
+        usage: dict[str, object] = {**base, **extra}
+        return {
+            "type": "assistant",
+            "uuid": uuid,
+            "parentUuid": parent,
+            "timestamp": ts,
+            "cwd": "/x",
+            "sessionId": session_id,
+            "message": {
+                "model": "claude-sonnet-5",
+                "content": [{"type": "text", "text": "x"}],
+                "usage": usage,
+            },
+        }
+
+    # Four independent sessions, each a pair differing in exactly one extended field.
+    cases: dict[str, tuple[dict[str, object], dict[str, object]]] = {
+        "s-ext-5m": (
+            {"cache_creation": {"ephemeral_5m_input_tokens": 100}},
+            {"cache_creation": {"ephemeral_5m_input_tokens": 200}},
+        ),
+        "s-ext-1h": (
+            {"cache_creation": {"ephemeral_1h_input_tokens": 100}},
+            {"cache_creation": {"ephemeral_1h_input_tokens": 200}},
+        ),
+        "s-ext-websearch": (
+            {"server_tool_use": {"web_search_requests": 1}},
+            {"server_tool_use": {"web_search_requests": 2}},
+        ),
+        "s-ext-webfetch": (
+            {"server_tool_use": {"web_fetch_requests": 1}},
+            {"server_tool_use": {"web_fetch_requests": 2}},
+        ),
+    }
+
+    config = load_config()
+    for session_id, (extra1, extra2) in cases.items():
+        records: list[dict[str, object]] = [
+            {
+                "type": "user", "uuid": f"{session_id}-u1", "parentUuid": None,
+                "timestamp": "2026-07-09T02:15:00.000Z", "cwd": "/x",
+                "sessionId": session_id,
+                "message": {"role": "user", "content": "go"},
+            },
+            asst(session_id, f"{session_id}-a1", f"{session_id}-u1",
+                 "2026-07-09T02:15:05.000Z", extra1),
+            asst(session_id, f"{session_id}-a2", f"{session_id}-a1",
+                 "2026-07-09T02:15:06.000Z", extra2),
+        ]
+        _write_jsonl(
+            temp_home / ".claude" / "projects" / "demo" / f"{session_id}.jsonl", records
+        )
+
+    init_db(config.storage.db_path)
+    parse_incremental(config)
+
+    with closing(get_connection(config.storage.db_path)) as conn:
+        rows = conn.execute(
+            "SELECT session_id, request_id, is_duplicate, input_tokens FROM requests "
+            "WHERE message_id IS NULL ORDER BY session_id, request_id"
+        ).fetchall()
+    by_session: dict[str, list[sqlite3.Row]] = {}
+    for row in rows:
+        by_session.setdefault(row["session_id"], []).append(row)
+    # Every row across all four pairs must remain billable (not collapsed): the key
+    # now discriminates on the extended field each pair differs in.
+    for session_id in cases:
+        pair = by_session[session_id]
+        assert len(pair) == 2, session_id
+        assert all(r["is_duplicate"] == 0 for r in pair), session_id
+        assert all(r["input_tokens"] == 5 for r in pair), session_id
