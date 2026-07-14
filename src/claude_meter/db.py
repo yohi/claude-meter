@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS requests (
     service_tier TEXT,
     speed TEXT,
     inference_geo TEXT,
+    message_id TEXT,
     response_time_ms INTEGER,
     cost_usd REAL,
     prompt_text TEXT,
@@ -151,6 +152,7 @@ _REQUESTS_EXTENDED_COLUMNS: tuple[tuple[str, str], ...] = (
     ("service_tier", "TEXT"),
     ("speed", "TEXT"),
     ("inference_geo", "TEXT"),
+    ("message_id", "TEXT"),
 )
 
 
@@ -167,6 +169,13 @@ def migrate_requests(conn: sqlite3.Connection) -> None:
     duplicate column name``; that specific error is swallowed since the end state
     is identical to a successful migration. Unrelated ``OperationalError``s (e.g. a
     genuinely broken schema) are re-raised.
+
+    Also (re)creates ``idx_requests_message_id``. This index cannot live in
+    ``SCHEMA_SQL`` because ``message_id`` is only guaranteed to exist once this
+    function has run: on a pre-existing database created before this column was
+    introduced, ``CREATE TABLE IF NOT EXISTS`` in ``SCHEMA_SQL`` is a no-op, so
+    indexing the column there would fail with ``OperationalError: no such column:
+    message_id`` before the ``ALTER TABLE`` below has a chance to add it.
     """
     existing = {row[1] for row in conn.execute("PRAGMA table_info(requests)")}
     for name, decl in _REQUESTS_EXTENDED_COLUMNS:
@@ -178,3 +187,5 @@ def migrate_requests(conn: sqlite3.Connection) -> None:
                     raise
                 # Another process already added this column concurrently; the
                 # migration is idempotent by design, so treat this as a no-op.
+                pass
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_message_id ON requests(message_id)")

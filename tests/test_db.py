@@ -186,3 +186,62 @@ def test_migrate_requests_adds_columns_idempotently(tmp_path: Path) -> None:
         assert row["service_tier"] is None
     finally:
         conn.close()
+
+
+def test_init_db_on_legacy_database_without_message_id_column(tmp_path: Path) -> None:
+    """Regression test: init_db() must not attempt to index message_id via
+    SCHEMA_SQL before migrate_requests() has had a chance to add the column to a
+    pre-existing database that predates it. CREATE TABLE IF NOT EXISTS is a
+    no-op on such a database, so indexing message_id in the same script would
+    fail with OperationalError: no such column: message_id."""
+    db_path = tmp_path / "legacy_no_message_id.db"
+    conn = get_connection(db_path)
+    try:
+        # Recreate a pre-migration requests/sync_state schema (no message_id
+        # column at all, predating even the extended-columns migration).
+        conn.execute(
+            """CREATE TABLE requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp DATETIME NOT NULL,
+                session_id TEXT NOT NULL,
+                request_id TEXT NOT NULL,
+                project TEXT,
+                git_repository TEXT,
+                model TEXT NOT NULL,
+                region TEXT,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                cache_creation_input_tokens INTEGER,
+                cache_read_input_tokens INTEGER,
+                response_time_ms INTEGER,
+                cost_usd REAL,
+                prompt_text TEXT,
+                response_text TEXT,
+                source_file TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (session_id, request_id)
+            )"""
+        )
+        conn.execute(
+            "CREATE TABLE sync_state (file_path TEXT PRIMARY KEY, last_size INTEGER, "
+            "last_line INTEGER, last_modified DATETIME)"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Must not raise.
+    init_db(db_path)
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        assert "message_id" in _requests_columns(conn)
+        indexes = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='requests'"
+            )
+        }
+        assert "idx_requests_message_id" in indexes
+    finally:
+        conn.close()

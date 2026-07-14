@@ -1,10 +1,15 @@
 import json
+import sqlite3
+import threading
 from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
+from claude_meter import collector
 from claude_meter.collector import collect_files, derive_project, parse_incremental
-from claude_meter.config import load_config
+from claude_meter.config import Config, load_config
 from claude_meter.db import get_connection, init_db
 
 
@@ -710,3 +715,284 @@ def test_parse_incremental_defaults_extended_fields_when_absent(
     assert row["service_tier"] is None
     assert row["speed"] is None
     assert row["inference_geo"] is None
+
+
+def test_parallel_tool_use_split_dedups_usage_by_message_id(temp_home: Path) -> None:
+    """Claude Code splits one API response containing multiple parallel tool_use
+    blocks into several 'assistant' JSONL lines that all share the same real
+    Anthropic response id (message.id) and an identical (duplicated) usage block.
+    Only the first such line may keep the token usage; later lines with the same
+    message.id must be zeroed out so the underlying single Bedrock invocation is
+    not billed multiple times."""
+    projects_dir = temp_home / ".claude" / "projects" / "demo"
+    projects_dir.mkdir(parents=True)
+    session_id = "sess-split"
+    usage_block = {
+        "input_tokens": 2,
+        "output_tokens": 1113,
+        "cache_creation_input_tokens": 3449,
+        "cache_read_input_tokens": 76079,
+    }
+    records = [
+        {
+            "type": "assistant",
+            "uuid": "a1",
+            "parentUuid": None,
+            "timestamp": "2026-07-09T02:15:05.881Z",
+            "cwd": "/x",
+            "sessionId": session_id,
+            "message": {
+                "id": "msg_bdrk_dup1",
+                "model": "claude-sonnet-5",
+                "content": [{"type": "tool_use", "id": "t1", "name": "bash", "input": {}}],
+                "usage": usage_block,
+            },
+        },
+        {
+            "type": "assistant",
+            "uuid": "a2",
+            "parentUuid": "a1",
+            "timestamp": "2026-07-09T02:15:06.884Z",
+            "cwd": "/x",
+            "sessionId": session_id,
+            "message": {
+                "id": "msg_bdrk_dup1",
+                "model": "claude-sonnet-5",
+                "content": [{"type": "tool_use", "id": "t2", "name": "bash", "input": {}}],
+                "usage": usage_block,
+            },
+        },
+    ]
+    (projects_dir / "s-split.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in records), encoding="utf-8"
+    )
+
+    config = load_config()
+    init_db(config.storage.db_path)
+    inserted = parse_incremental(config)
+    assert inserted == 2  # both transcript lines are kept as distinct rows
+
+    with closing(get_connection(config.storage.db_path)) as conn:
+        rows = conn.execute(
+            "SELECT request_id, message_id, input_tokens, output_tokens, "
+            "cache_creation_input_tokens, cache_read_input_tokens "
+            "FROM requests WHERE session_id = ? ORDER BY request_id",
+            (session_id,),
+        ).fetchall()
+    assert len(rows) == 2
+    assert rows[0]["message_id"] == "msg_bdrk_dup1"
+    assert rows[1]["message_id"] == "msg_bdrk_dup1"
+    # Exactly one of the two rows keeps the real usage; the other is zeroed.
+    totals = {
+        "input_tokens": sum(r["input_tokens"] for r in rows),
+        "output_tokens": sum(r["output_tokens"] for r in rows),
+        "cache_creation_input_tokens": sum(r["cache_creation_input_tokens"] for r in rows),
+        "cache_read_input_tokens": sum(r["cache_read_input_tokens"] for r in rows),
+    }
+    assert totals == usage_block
+    # The first-seen row (a1) is the one that keeps the usage.
+    primary = next(r for r in rows if r["request_id"] == "a1")
+    duplicate = next(r for r in rows if r["request_id"] == "a2")
+    assert primary["input_tokens"] == 2
+    assert duplicate["input_tokens"] == 0
+    assert duplicate["output_tokens"] == 0
+    assert duplicate["cache_creation_input_tokens"] == 0
+    assert duplicate["cache_read_input_tokens"] == 0
+
+
+def test_missing_message_id_keeps_legacy_no_dedup_behavior(
+    temp_home: Path, sample_project_jsonl: Path
+) -> None:
+    """Records without message.id (older ClaudeCode versions / the shared test
+    fixture) must not be deduplicated: message_id is NULL and full usage is kept,
+    preserving pre-fix behavior exactly."""
+    config = load_config()
+    init_db(config.storage.db_path)
+    parse_incremental(config)
+
+    with closing(get_connection(config.storage.db_path)) as conn:
+        row = conn.execute(
+            "SELECT message_id, input_tokens FROM requests WHERE request_id = 'a1'"
+        ).fetchone()
+    assert row is not None
+    assert row["message_id"] is None
+    assert row["input_tokens"] == 100
+
+
+def test_message_id_dedup_is_idempotent_across_reparse(temp_home: Path) -> None:
+    """Re-running parse_incremental (and a full --reparse) must not flip which row
+    is primary, and must not zero-out an already-primary row on re-insert."""
+    projects_dir = temp_home / ".claude" / "projects" / "demo"
+    projects_dir.mkdir(parents=True)
+    session_id = "sess-idem"
+    usage_block = {"input_tokens": 5, "output_tokens": 7}
+    records = [
+        {
+            "type": "assistant",
+            "uuid": "a1",
+            "parentUuid": None,
+            "timestamp": "2026-07-09T02:15:05.881Z",
+            "cwd": "/x",
+            "sessionId": session_id,
+            "message": {
+                "id": "msg_bdrk_idem",
+                "model": "m",
+                "content": [{"type": "tool_use", "id": "t1", "name": "bash", "input": {}}],
+                "usage": usage_block,
+            },
+        },
+        {
+            "type": "assistant",
+            "uuid": "a2",
+            "parentUuid": "a1",
+            "timestamp": "2026-07-09T02:15:06.884Z",
+            "cwd": "/x",
+            "sessionId": session_id,
+            "message": {
+                "id": "msg_bdrk_idem",
+                "model": "m",
+                "content": [{"type": "tool_use", "id": "t2", "name": "bash", "input": {}}],
+                "usage": usage_block,
+            },
+        },
+    ]
+    (projects_dir / "s-idem.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in records), encoding="utf-8"
+    )
+
+    config = load_config()
+    init_db(config.storage.db_path)
+    assert parse_incremental(config) == 2
+    assert parse_incremental(config, reparse=True) == 2
+
+    with closing(get_connection(config.storage.db_path)) as conn:
+        rows = conn.execute(
+            "SELECT request_id, input_tokens FROM requests WHERE session_id = ? "
+            "ORDER BY request_id",
+            (session_id,),
+        ).fetchall()
+    assert {r["request_id"]: r["input_tokens"] for r in rows} == {"a1": 5, "a2": 0}
+
+
+def test_concurrent_processes_do_not_double_count_shared_message_id(
+    temp_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two OS processes sharing one ~/.claude-meter/data.db (the documented
+    ``collect`` + ``watch``/``ui --watch`` pattern) must not both bill the same
+    Anthropic ``message.id``.
+
+    This drives the real ``parse_incremental`` twice, each against its own
+    ``projects_dir`` but the SAME on-disk SQLite file, so each call opens an
+    independent ``sqlite3`` connection (via ``get_connection``) to that file --
+    exactly the cross-process setup a single shared connection cannot reproduce.
+    A ``threading.Barrier`` wrapped around the real ``_claim_message_id`` forces
+    both connections to run their claim-check (the SELECT) before either commits
+    its INSERT, deterministically opening the race window.
+
+    Without the fix both claim-checks observe \"unclaimed\" and both rows keep full
+    usage, double-counting the single underlying Bedrock invocation. With the fix
+    each per-record ``BEGIN IMMEDIATE`` serialises the two connections: the second
+    connection blocks at its own ``BEGIN IMMEDIATE`` until the first commits, so
+    its claim-check sees the already-committed row and zeroes its usage. On the
+    fixed code the second connection therefore never reaches the barrier (it is
+    parked in ``BEGIN IMMEDIATE``), the first connection's ``barrier.wait`` times
+    out, and the wrapper simply proceeds.
+    """
+    projects_a = temp_home / ".claude" / "projects" / "proc-a"
+    projects_b = temp_home / ".claude" / "projects" / "proc-b"
+    projects_a.mkdir(parents=True)
+    projects_b.mkdir(parents=True)
+
+    shared_message_id = "msg_bdrk_race"
+
+    def assistant_line(session_id: str, uuid: str) -> str:
+        record = {
+            "type": "assistant",
+            "uuid": uuid,
+            "parentUuid": None,
+            "timestamp": "2026-07-09T02:15:05.881Z",
+            "cwd": "/x",
+            "sessionId": session_id,
+            "message": {
+                "id": shared_message_id,
+                "model": "m",
+                "content": [{"type": "tool_use", "id": "t1", "name": "bash", "input": {}}],
+                "usage": {"input_tokens": 100, "output_tokens": 50},
+            },
+        }
+        return json.dumps(record) + "\n"
+
+    (projects_a / "sess-a.jsonl").write_text(assistant_line("sess-A", "req-A"), encoding="utf-8")
+    (projects_b / "sess-b.jsonl").write_text(assistant_line("sess-B", "req-B"), encoding="utf-8")
+
+    config_a = load_config()
+    config_a.claude.projects_dir = projects_a
+    config_b = load_config()
+    config_b.claude.projects_dir = projects_b
+    # Both simulated processes read/write the SAME database file -- the crux of
+    # the cross-process race (load_config already defaults both to it, set
+    # explicitly to make the shared target unambiguous).
+    config_b.storage.db_path = config_a.storage.db_path
+    init_db(config_a.storage.db_path)
+
+    # Force both connections' claim-check SELECTs to complete before either
+    # commits its INSERT. On the fixed code the second connection is parked in
+    # its own BEGIN IMMEDIATE and never reaches the barrier, so the first
+    # connection's wait times out; the wrapper then proceeds and the two
+    # connections serialise correctly.
+    barrier = threading.Barrier(2, timeout=3.0)
+    real_claim = collector._claim_message_id
+
+    def racing_claim(
+        conn: sqlite3.Connection,
+        message_id: str | None,
+        session_id: str,
+        request_id: str,
+    ) -> bool:
+        result = real_claim(conn, message_id, session_id, request_id)
+        try:
+            barrier.wait()
+        except threading.BrokenBarrierError:
+            pass
+        return result
+
+    monkeypatch.setattr(collector, "_claim_message_id", racing_claim)
+
+    errors: list[BaseException] = []
+
+    def run(config: Config) -> None:
+        try:
+            parse_incremental(config)
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=run, args=(config_a,)),
+        threading.Thread(target=run, args=(config_b,)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=15)
+
+    assert not any(thread.is_alive() for thread in threads), "parse_incremental deadlocked"
+    assert not errors, f"parse_incremental raised in a worker thread: {errors}"
+
+    with closing(get_connection(config_a.storage.db_path)) as conn:
+        rows = conn.execute(
+            "SELECT session_id, input_tokens, output_tokens FROM requests "
+            "WHERE message_id = ? ORDER BY session_id",
+            (shared_message_id,),
+        ).fetchall()
+
+    assert len(rows) == 2, "both transcript rows sharing the message_id must be inserted"
+    non_zero = [row for row in rows if row["input_tokens"] > 0]
+    # At most one row may retain the real usage; the single shared Bedrock
+    # invocation must never be billed on more than one row.
+    assert len(non_zero) <= 1, (
+        "the same message_id was billed on multiple rows (race double-count): "
+        f"{[(row['session_id'], row['input_tokens']) for row in rows]}"
+    )
+    # The retained usage must equal exactly the single invocation's tokens.
+    assert sum(row["input_tokens"] for row in rows) == 100
+    assert sum(row["output_tokens"] for row in rows) == 50
