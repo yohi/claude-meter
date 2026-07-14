@@ -39,7 +39,6 @@ CREATE INDEX IF NOT EXISTS idx_requests_timestamp ON requests(timestamp);
 CREATE INDEX IF NOT EXISTS idx_requests_project ON requests(project);
 CREATE INDEX IF NOT EXISTS idx_requests_model ON requests(model);
 CREATE INDEX IF NOT EXISTS idx_requests_session ON requests(session_id);
-CREATE INDEX IF NOT EXISTS idx_requests_message_id ON requests(message_id);
 
 CREATE TABLE IF NOT EXISTS pricing (
     model TEXT NOT NULL,
@@ -170,6 +169,13 @@ def migrate_requests(conn: sqlite3.Connection) -> None:
     duplicate column name``; that specific error is swallowed since the end state
     is identical to a successful migration. Unrelated ``OperationalError``s (e.g. a
     genuinely broken schema) are re-raised.
+
+    Also (re)creates ``idx_requests_message_id``. This index cannot live in
+    ``SCHEMA_SQL`` because ``message_id`` is only guaranteed to exist once this
+    function has run: on a pre-existing database created before this column was
+    introduced, ``CREATE TABLE IF NOT EXISTS`` in ``SCHEMA_SQL`` is a no-op, so
+    indexing the column there would fail with ``OperationalError: no such column:
+    message_id`` before the ``ALTER TABLE`` below has a chance to add it.
     """
     existing = {row[1] for row in conn.execute("PRAGMA table_info(requests)")}
     for name, decl in _REQUESTS_EXTENDED_COLUMNS:
@@ -182,3 +188,4 @@ def migrate_requests(conn: sqlite3.Connection) -> None:
                 # Another process already added this column concurrently; the
                 # migration is idempotent by design, so treat this as a no-op.
                 pass
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_message_id ON requests(message_id)")
