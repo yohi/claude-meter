@@ -180,12 +180,18 @@ def migrate_requests(conn: sqlite3.Connection) -> None:
     is identical to a successful migration. Unrelated ``OperationalError``s (e.g. a
     genuinely broken schema) are re-raised.
 
-    Also (re)creates ``idx_requests_message_id``. This index cannot live in
-    ``SCHEMA_SQL`` because ``message_id`` is only guaranteed to exist once this
-    function has run: on a pre-existing database created before this column was
-    introduced, ``CREATE TABLE IF NOT EXISTS`` in ``SCHEMA_SQL`` is a no-op, so
-    indexing the column there would fail with ``OperationalError: no such column:
-    message_id`` before the ``ALTER TABLE`` below has a chance to add it.
+    Also (re)creates ``idx_requests_message_id`` and ``idx_requests_message_id_dup``.
+    These indexes cannot live in ``SCHEMA_SQL`` because ``message_id``/``is_duplicate``
+    are only guaranteed to exist once this function has run: on a pre-existing
+    database created before these columns were introduced, ``CREATE TABLE IF NOT
+    EXISTS`` in ``SCHEMA_SQL`` is a no-op, so indexing the columns there would fail
+    with ``OperationalError: no such column: message_id`` before the ``ALTER TABLE``
+    below has a chance to add them. ``idx_requests_message_id_dup`` covers the
+    ``WHERE message_id IS NULL AND is_duplicate = 0`` scan in
+    ``_collapse_split_messages`` (collector.py), which runs on every
+    ``parse_incremental`` call: without it, rows already flagged ``is_duplicate = 1``
+    in a prior run still require a per-row table lookup to be excluded, repeatedly,
+    as older/split transcripts accumulate NULL-``message_id`` rows.
     """
     existing = {row[1] for row in conn.execute("PRAGMA table_info(requests)")}
     for name, decl in _REQUESTS_EXTENDED_COLUMNS:
@@ -199,3 +205,7 @@ def migrate_requests(conn: sqlite3.Connection) -> None:
                 # migration is idempotent by design, so treat this as a no-op.
                 pass
     conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_message_id ON requests(message_id)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_requests_message_id_dup "
+        "ON requests(message_id, is_duplicate)"
+    )
