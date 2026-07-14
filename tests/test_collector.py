@@ -1139,6 +1139,58 @@ def test_split_without_message_id_zeroes_response_time_ms_on_duplicate(
     assert by_id["a2"]["response_time_ms"] is None
 
 
+def test_null_input_ts_never_merges_rows_before_first_user_record(
+    temp_home: Path,
+) -> None:
+    """Regression test: when a transcript's assistant lines appear before ANY
+    ``user`` record with a parseable timestamp, ``input_ts`` stays NULL for all
+    of them. NULL cannot discriminate distinct turns (unlike a real timestamp,
+    every such row would share the exact same NULL value), so
+    ``_collapse_split_messages`` must fall back to each row's own ``id`` and
+    never collapse these rows -- even when they coincidentally share an
+    identical usage 4-tuple. Silently zeroing a real, billable request here
+    would be far worse than missing a split-line collapse in this narrow
+    window."""
+    session_id = "s-null-input-ts"
+    usage = {"input_tokens": 4, "output_tokens": 8, "cache_read_input_tokens": 300}
+    records: list[dict[str, object]] = [
+        {
+            # No preceding user record at all -> last_input_ts is None here.
+            "type": "assistant", "uuid": "a1", "parentUuid": None,
+            "timestamp": "2026-07-09T02:15:05.000Z", "cwd": "/x",
+            "sessionId": session_id,
+            "message": {"model": "claude-sonnet-5",
+                        "content": [{"type": "text", "text": "one"}], "usage": usage},
+        },
+        {
+            # A second, genuinely distinct assistant record: still no user record
+            # has appeared, so last_input_ts is STILL None. Coincidentally
+            # identical usage to a1.
+            "type": "assistant", "uuid": "a2", "parentUuid": "a1",
+            "timestamp": "2026-07-09T02:15:20.000Z", "cwd": "/x",
+            "sessionId": session_id,
+            "message": {"model": "claude-sonnet-5",
+                        "content": [{"type": "text", "text": "two"}], "usage": usage},
+        },
+    ]
+    config = load_config()
+    _write_jsonl(temp_home / ".claude" / "projects" / "demo" / f"{session_id}.jsonl", records)
+    init_db(config.storage.db_path)
+    assert parse_incremental(config) == 2
+
+    with closing(get_connection(config.storage.db_path)) as conn:
+        rows = conn.execute(
+            "SELECT request_id, is_duplicate, input_tokens FROM requests "
+            "WHERE session_id = ? ORDER BY request_id",
+            (session_id,),
+        ).fetchall()
+    # Neither row is flagged as a duplicate; both retain full usage.
+    assert {r["request_id"]: (r["is_duplicate"], r["input_tokens"]) for r in rows} == {
+        "a1": (0, 4),
+        "a2": (0, 4),
+    }
+
+
 def test_structural_dedup_does_not_merge_distinct_turns_with_same_usage(
     temp_home: Path,
 ) -> None:

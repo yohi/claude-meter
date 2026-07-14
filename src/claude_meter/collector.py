@@ -490,6 +490,16 @@ def _collapse_split_messages(conn: sqlite3.Connection) -> None:
     ``input_ts`` is the reliable turn discriminator). Within one key only the
     lowest-``id`` row stays billable; the rest are zeroed and flagged.
 
+    ``input_ts`` is NULL until the first ``user`` record with a parseable timestamp
+    is seen for a file (e.g. a transcript that opens with an assistant record, or a
+    ``user`` record whose own timestamp failed to parse), so it cannot discriminate
+    turns in that window -- two genuinely distinct API calls could coincidentally
+    share an identical usage 4-tuple there and would otherwise collide on the same
+    key. To avoid silently zeroing a real, billable request, each ``input_ts IS
+    NULL`` row instead falls back to its own ``id`` as the turn component of the
+    key, so it is never merged with any other row (the safe failure mode is missing
+    a split-line collapse in this narrow window, not deleting real cost/usage data).
+
     Scoped to ``message_id IS NULL``: rows with a real ``message.id`` are already
     deduplicated inline by ``_claim_message_id`` and are never touched here.
 
@@ -518,10 +528,14 @@ def _collapse_split_messages(conn: sqlite3.Connection) -> None:
         seen: set[tuple[object, ...]] = set()
         duplicate_ids: list[int] = []
         for row in rows:
+            input_ts = row["input_ts"]
             key = (
                 row["session_id"],
                 row["source_file"],
-                row["input_ts"],
+                # See docstring: NULL input_ts cannot discriminate turns, so fall
+                # back to this row's own id -- a value no other row can share --
+                # rather than risk merging two genuinely distinct API calls.
+                input_ts if input_ts is not None else row["id"],
                 row["input_tokens"],
                 row["output_tokens"],
                 row["cache_creation_input_tokens"],
