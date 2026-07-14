@@ -1357,3 +1357,91 @@ def test_split_message_id_keeps_complete_max_output(temp_home: Path) -> None:
     assert by_id2["a2"]["output_tokens"] == 0
     assert by_id2["a3"]["output_tokens"] == 0
     assert sum(r["output_tokens"] for r in by_id2.values()) == 216
+
+
+def test_message_id_duplicate_zeroes_response_time_ms(temp_home: Path) -> None:
+    """Regression test: a message_id-duplicate row (a content-block split sharing a
+    real ``message.id`` with an earlier primary row) must have ``response_time_ms``
+    nulled out alongside its zeroed token/cost columns. Each split line carries its
+    OWN transcript timestamp (hence its own ``response_time_ms`` relative to the
+    shared triggering input), so leaving it un-zeroed would let a non-billable
+    duplicate row's response time leak into ``AVG(response_time_ms)`` aggregates
+    (ui/overview.py), whose query has no ``is_duplicate`` filter."""
+    projects_dir = temp_home / ".claude" / "projects" / "demo"
+    projects_dir.mkdir(parents=True)
+    session_id = "sess-split-rtms-id"
+    usage_block = {
+        "input_tokens": 2,
+        "output_tokens": 1113,
+        "cache_creation_input_tokens": 3449,
+        "cache_read_input_tokens": 76079,
+    }
+    records = [
+        {
+            "type": "user",
+            "uuid": "u1",
+            "parentUuid": None,
+            "timestamp": "2026-07-09T02:15:00.000Z",
+            "cwd": "/x",
+            "sessionId": session_id,
+            "message": {"role": "user", "content": "do a bunch of things"},
+        },
+        {
+            "type": "assistant",
+            "uuid": "a1",
+            "parentUuid": "u1",
+            "timestamp": "2026-07-09T02:15:05.000Z",
+            "cwd": "/x",
+            "sessionId": session_id,
+            "message": {
+                "id": "msg_bdrk_dup1",
+                "model": "claude-sonnet-5",
+                "content": [{"type": "tool_use", "id": "t1", "name": "bash", "input": {}}],
+                "usage": usage_block,
+            },
+        },
+        {
+            "type": "assistant",
+            "uuid": "a2",
+            "parentUuid": "a1",
+            "timestamp": "2026-07-09T02:15:08.000Z",
+            "cwd": "/x",
+            "sessionId": session_id,
+            "message": {
+                "id": "msg_bdrk_dup1",
+                "model": "claude-sonnet-5",
+                "content": [{"type": "tool_use", "id": "t2", "name": "bash", "input": {}}],
+                "usage": usage_block,
+            },
+        },
+    ]
+    (projects_dir / "s-split-id.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in records), encoding="utf-8"
+    )
+
+    config = load_config()
+    init_db(config.storage.db_path)
+    assert parse_incremental(config) == 2
+
+    with closing(get_connection(config.storage.db_path)) as conn:
+        rows = conn.execute(
+            "SELECT request_id, message_id, input_tokens, output_tokens, "
+            "cache_creation_input_tokens, cache_read_input_tokens, response_time_ms "
+            "FROM requests WHERE session_id = ? ORDER BY request_id",
+            (session_id,),
+        ).fetchall()
+    by_id = {r["request_id"]: r for r in rows}
+    assert len(by_id) == 2
+    assert by_id["a1"]["message_id"] == "msg_bdrk_dup1"
+    assert by_id["a2"]["message_id"] == "msg_bdrk_dup1"
+    # Primary (first-seen a1) keeps its real usage AND its own response_time_ms
+    # (02:15:05 - 02:15:00 == 5s); the fix must not touch the primary row.
+    assert by_id["a1"]["input_tokens"] == 2
+    assert by_id["a1"]["response_time_ms"] == 5000
+    # Duplicate (a2): usage already zeroed, and response_time_ms must be NULL too so
+    # it cannot pollute AVG(response_time_ms) aggregates (no is_duplicate filter there).
+    assert by_id["a2"]["input_tokens"] == 0
+    assert by_id["a2"]["output_tokens"] == 0
+    assert by_id["a2"]["cache_creation_input_tokens"] == 0
+    assert by_id["a2"]["cache_read_input_tokens"] == 0
+    assert by_id["a2"]["response_time_ms"] is None

@@ -416,6 +416,11 @@ def parse_incremental(config: Config, *, reparse: bool = False) -> int:
                             cache_1h = 0
                             web_search = 0
                             web_fetch = 0
+                            # This row's usage/cost is now zero, so its own
+                            # response_time_ms must not leak into AVG(response_time_ms)
+                            # aggregates (ui/overview.py has no is_duplicate filter);
+                            # mirror the message_id-NULL path in _collapse_split_messages.
+                            response_time_ms = None
                         rec = UsageRecord(
                             timestamp=timestamp,
                             session_id=session_id,
