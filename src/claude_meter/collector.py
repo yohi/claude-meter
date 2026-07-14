@@ -367,46 +367,77 @@ def parse_incremental(config: Config, *, reparse: bool = False) -> int:
                         usage.get("cache_creation_input_tokens", 0) or 0
                     )
                     cache_read_input_tokens = usage.get("cache_read_input_tokens", 0) or 0
-                    if not _claim_message_id(conn, message_id, session_id, request_id):
-                        # This assistant line is a content-block split (e.g. one of
-                        # several parallel tool_use blocks) of an API response
-                        # already billed via an earlier transcript line sharing the
-                        # same message_id. Zero its usage so the single underlying
-                        # Bedrock invocation is not counted multiple times.
-                        input_tokens = 0
-                        output_tokens = 0
-                        cache_creation_input_tokens = 0
-                        cache_read_input_tokens = 0
-                        cache_5m = 0
-                        cache_1h = 0
-                        web_search = 0
-                        web_fetch = 0
-                    rec = UsageRecord(
-                        timestamp=timestamp,
-                        session_id=session_id,
-                        request_id=request_id,
-                        project=project,
-                        git_repository=repo,
-                        model=model,
-                        region=config.claude.region,
-                        input_tokens=input_tokens,
-                        output_tokens=output_tokens,
-                        cache_creation_input_tokens=cache_creation_input_tokens,
-                        cache_read_input_tokens=cache_read_input_tokens,
-                        cache_creation_5m_tokens=cache_5m,
-                        cache_creation_1h_tokens=cache_1h,
-                        web_search_requests=web_search,
-                        web_fetch_requests=web_fetch,
-                        service_tier=usage.get("service_tier") or None,
-                        speed=usage.get("speed") or None,
-                        inference_geo=usage.get("inference_geo") or None,
-                        message_id=message_id,
-                        response_time_ms=response_time_ms,
-                        prompt_text=prompt_text,
-                        response_text=response_text,
-                        source_file=file_path,
-                    )
-                    if _insert_usage(conn, rec):
+                    # Claim-check + insert for a message_id-bearing record must be
+                    # atomic against concurrently-running collect/watch/ui processes
+                    # that share this SQLite file. BEGIN IMMEDIATE takes a RESERVED
+                    # write lock BEFORE the claim SELECT, so a second process's own
+                    # BEGIN IMMEDIATE blocks (retrying via busy_timeout) until this
+                    # transaction commits its claim; that process's claim-check then
+                    # sees the committed row and zeroes its usage, instead of both
+                    # processes reading "unclaimed" and each inserting full
+                    # (double-counted) usage for one real Bedrock invocation.
+                    if message_id is not None:
+                        # A prior message_id-None row may have left an implicit
+                        # transaction open (Python's sqlite3 auto-BEGINs before DML
+                        # in the default isolation mode); commit it first so
+                        # BEGIN IMMEDIATE cannot raise "cannot start a transaction
+                        # within a transaction".
+                        if conn.in_transaction:
+                            conn.commit()
+                        conn.execute("BEGIN IMMEDIATE")
+                    try:
+                        if not _claim_message_id(conn, message_id, session_id, request_id):
+                            # This assistant line is a content-block split (e.g. one of
+                            # several parallel tool_use blocks) of an API response
+                            # already billed via an earlier transcript line sharing the
+                            # same message_id. Zero its usage so the single underlying
+                            # Bedrock invocation is not counted multiple times.
+                            input_tokens = 0
+                            output_tokens = 0
+                            cache_creation_input_tokens = 0
+                            cache_read_input_tokens = 0
+                            cache_5m = 0
+                            cache_1h = 0
+                            web_search = 0
+                            web_fetch = 0
+                        rec = UsageRecord(
+                            timestamp=timestamp,
+                            session_id=session_id,
+                            request_id=request_id,
+                            project=project,
+                            git_repository=repo,
+                            model=model,
+                            region=config.claude.region,
+                            input_tokens=input_tokens,
+                            output_tokens=output_tokens,
+                            cache_creation_input_tokens=cache_creation_input_tokens,
+                            cache_read_input_tokens=cache_read_input_tokens,
+                            cache_creation_5m_tokens=cache_5m,
+                            cache_creation_1h_tokens=cache_1h,
+                            web_search_requests=web_search,
+                            web_fetch_requests=web_fetch,
+                            service_tier=usage.get("service_tier") or None,
+                            speed=usage.get("speed") or None,
+                            inference_geo=usage.get("inference_geo") or None,
+                            message_id=message_id,
+                            response_time_ms=response_time_ms,
+                            prompt_text=prompt_text,
+                            response_text=response_text,
+                            source_file=file_path,
+                        )
+                        newly_inserted = _insert_usage(conn, rec)
+                    except BaseException:
+                        # Roll back only the per-record transaction opened above for
+                        # the message_id path, then re-raise so the error is never
+                        # silently swallowed. (message_id-None rows stay in the
+                        # batched per-file transaction, unchanged.)
+                        if message_id is not None:
+                            conn.rollback()
+                        raise
+                    else:
+                        if message_id is not None:
+                            conn.commit()
+                    if newly_inserted:
                         inserted += 1
             _update_sync_state(
                 conn,
@@ -444,6 +475,16 @@ def _claim_message_id(
     Idempotent: re-processing an already-inserted primary row (matching
     session_id/request_id) still returns True, so incremental re-runs and
     ``--reparse`` never flip a row from primary to zeroed or vice versa.
+
+    Atomicity contract (callers): when ``message_id`` is not ``None`` the caller
+    MUST have opened a ``BEGIN IMMEDIATE`` transaction on ``conn`` before this
+    SELECT runs, and MUST NOT commit until after the matching ``_insert_usage``
+    for the same row. The RESERVED write lock taken by ``BEGIN IMMEDIATE`` is
+    what makes this claim-check and that insert a single atomic step across
+    separate processes sharing the database file: a second process's own
+    ``BEGIN IMMEDIATE`` blocks (retrying via ``busy_timeout``) until the first
+    commits, so the SELECT here observes the first process's already-committed
+    claim instead of racing it.
     """
     if message_id is None:
         return True

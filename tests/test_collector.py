@@ -1,10 +1,15 @@
 import json
+import sqlite3
+import threading
 from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
+from claude_meter import collector
 from claude_meter.collector import collect_files, derive_project, parse_incremental
-from claude_meter.config import load_config
+from claude_meter.config import Config, load_config
 from claude_meter.db import get_connection, init_db
 
 
@@ -867,3 +872,127 @@ def test_message_id_dedup_is_idempotent_across_reparse(temp_home: Path) -> None:
             (session_id,),
         ).fetchall()
     assert {r["request_id"]: r["input_tokens"] for r in rows} == {"a1": 5, "a2": 0}
+
+
+def test_concurrent_processes_do_not_double_count_shared_message_id(
+    temp_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two OS processes sharing one ~/.claude-meter/data.db (the documented
+    ``collect`` + ``watch``/``ui --watch`` pattern) must not both bill the same
+    Anthropic ``message.id``.
+
+    This drives the real ``parse_incremental`` twice, each against its own
+    ``projects_dir`` but the SAME on-disk SQLite file, so each call opens an
+    independent ``sqlite3`` connection (via ``get_connection``) to that file --
+    exactly the cross-process setup a single shared connection cannot reproduce.
+    A ``threading.Barrier`` wrapped around the real ``_claim_message_id`` forces
+    both connections to run their claim-check (the SELECT) before either commits
+    its INSERT, deterministically opening the race window.
+
+    Without the fix both claim-checks observe \"unclaimed\" and both rows keep full
+    usage, double-counting the single underlying Bedrock invocation. With the fix
+    each per-record ``BEGIN IMMEDIATE`` serialises the two connections: the second
+    connection blocks at its own ``BEGIN IMMEDIATE`` until the first commits, so
+    its claim-check sees the already-committed row and zeroes its usage. On the
+    fixed code the second connection therefore never reaches the barrier (it is
+    parked in ``BEGIN IMMEDIATE``), the first connection's ``barrier.wait`` times
+    out, and the wrapper simply proceeds.
+    """
+    projects_a = temp_home / ".claude" / "projects" / "proc-a"
+    projects_b = temp_home / ".claude" / "projects" / "proc-b"
+    projects_a.mkdir(parents=True)
+    projects_b.mkdir(parents=True)
+
+    shared_message_id = "msg_bdrk_race"
+
+    def assistant_line(session_id: str, uuid: str) -> str:
+        record = {
+            "type": "assistant",
+            "uuid": uuid,
+            "parentUuid": None,
+            "timestamp": "2026-07-09T02:15:05.881Z",
+            "cwd": "/x",
+            "sessionId": session_id,
+            "message": {
+                "id": shared_message_id,
+                "model": "m",
+                "content": [{"type": "tool_use", "id": "t1", "name": "bash", "input": {}}],
+                "usage": {"input_tokens": 100, "output_tokens": 50},
+            },
+        }
+        return json.dumps(record) + "\n"
+
+    (projects_a / "sess-a.jsonl").write_text(assistant_line("sess-A", "req-A"), encoding="utf-8")
+    (projects_b / "sess-b.jsonl").write_text(assistant_line("sess-B", "req-B"), encoding="utf-8")
+
+    config_a = load_config()
+    config_a.claude.projects_dir = projects_a
+    config_b = load_config()
+    config_b.claude.projects_dir = projects_b
+    # Both simulated processes read/write the SAME database file -- the crux of
+    # the cross-process race (load_config already defaults both to it, set
+    # explicitly to make the shared target unambiguous).
+    config_b.storage.db_path = config_a.storage.db_path
+    init_db(config_a.storage.db_path)
+
+    # Force both connections' claim-check SELECTs to complete before either
+    # commits its INSERT. On the fixed code the second connection is parked in
+    # its own BEGIN IMMEDIATE and never reaches the barrier, so the first
+    # connection's wait times out; the wrapper then proceeds and the two
+    # connections serialise correctly.
+    barrier = threading.Barrier(2, timeout=3.0)
+    real_claim = collector._claim_message_id
+
+    def racing_claim(
+        conn: sqlite3.Connection,
+        message_id: str | None,
+        session_id: str,
+        request_id: str,
+    ) -> bool:
+        result = real_claim(conn, message_id, session_id, request_id)
+        try:
+            barrier.wait()
+        except threading.BrokenBarrierError:
+            pass
+        return result
+
+    monkeypatch.setattr(collector, "_claim_message_id", racing_claim)
+
+    errors: list[BaseException] = []
+
+    def run(config: Config) -> None:
+        try:
+            parse_incremental(config)
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(target=run, args=(config_a,)),
+        threading.Thread(target=run, args=(config_b,)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=15)
+
+    assert not any(thread.is_alive() for thread in threads), "parse_incremental deadlocked"
+    assert not errors, f"parse_incremental raised in a worker thread: {errors}"
+
+    with closing(get_connection(config_a.storage.db_path)) as conn:
+        rows = conn.execute(
+            "SELECT session_id, input_tokens, output_tokens FROM requests "
+            "WHERE message_id = ? ORDER BY session_id",
+            (shared_message_id,),
+        ).fetchall()
+
+    assert len(rows) == 2, "both transcript rows sharing the message_id must be inserted"
+    non_zero = [row for row in rows if row["input_tokens"] > 0]
+    # At most one row may retain the real usage; the single shared Bedrock
+    # invocation must never be billed on more than one row.
+    assert len(non_zero) <= 1, (
+        "the same message_id was billed on multiple rows (race double-count): "
+        f"{[(row['session_id'], row['input_tokens']) for row in rows]}"
+    )
+    # The retained usage must equal exactly the single invocation's tokens.
+    assert sum(row["input_tokens"] for row in rows) == 100
+    assert sum(row["output_tokens"] for row in rows) == 50
