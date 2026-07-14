@@ -1179,3 +1179,71 @@ def test_structural_dedup_idempotent_across_reparse(temp_home: Path) -> None:
             (session_id,),
         ).fetchall()
     assert {r["request_id"]: r["input_tokens"] for r in rows} == {"a1": 9, "a2": 0}
+
+
+
+def test_split_message_id_keeps_complete_max_output(temp_home: Path) -> None:
+    """Split assistant lines share a message.id and identical input/cache usage, but
+    output_tokens GROWS across lines (the complete count appears only on the last
+    line). The billable primary row must carry the MAX (complete) output, not the
+    first line's partial output, and the response must still be billed exactly once."""
+    session_id = "sess-grow"
+
+    def line(uuid: str, parent: str | None, ts: str, out: int, block: dict[str, object]) -> dict[str, object]:
+        return {
+            "type": "assistant", "uuid": uuid, "parentUuid": parent,
+            "timestamp": ts, "cwd": "/x", "sessionId": session_id,
+            "message": {
+                "id": "msg_bdrk_grow", "model": "claude-sonnet-4-6",
+                "content": [block],
+                "usage": {
+                    "input_tokens": 131, "output_tokens": out,
+                    "cache_creation_input_tokens": 8470,
+                    "cache_read_input_tokens": 60221,
+                },
+            },
+        }
+
+    records: list[dict[str, object]] = [
+        line("a1", None, "2026-07-09T02:15:05.100Z", 4, {"type": "thinking", "thinking": "..."}),
+        line("a2", "a1", "2026-07-09T02:15:05.200Z", 4, {"type": "text", "text": "answer"}),
+        line("a3", "a2", "2026-07-09T02:15:05.300Z", 216,
+             {"type": "tool_use", "id": "t1", "name": "bash", "input": {}}),
+    ]
+    config = load_config()
+    _write_jsonl(temp_home / ".claude" / "projects" / "demo" / f"{session_id}.jsonl", records)
+    init_db(config.storage.db_path)
+    assert parse_incremental(config) == 3
+
+    def snapshot() -> dict[str, sqlite3.Row]:
+        with closing(get_connection(config.storage.db_path)) as conn:
+            rows = conn.execute(
+                "SELECT request_id, input_tokens, output_tokens, "
+                "cache_creation_input_tokens, cache_read_input_tokens "
+                "FROM requests WHERE session_id = ? ORDER BY request_id",
+                (session_id,),
+            ).fetchall()
+        return {r["request_id"]: r for r in rows}
+
+    by_id = snapshot()
+    assert len(by_id) == 3
+    # The single response is billed once with its COMPLETE usage: max output (216),
+    # not the first line's partial 4, and not the naive sum 4+4+216=224.
+    assert sum(r["output_tokens"] for r in by_id.values()) == 216
+    assert sum(r["input_tokens"] for r in by_id.values()) == 131
+    assert sum(r["cache_read_input_tokens"] for r in by_id.values()) == 60221
+    assert sum(r["cache_creation_input_tokens"] for r in by_id.values()) == 8470
+    # Primary (first-inserted a1) carries the merged max usage; a2/a3 are zeroed.
+    assert by_id["a1"]["output_tokens"] == 216
+    assert by_id["a1"]["input_tokens"] == 131
+    assert by_id["a2"]["output_tokens"] == 0
+    assert by_id["a3"]["output_tokens"] == 0
+    assert by_id["a3"]["cache_read_input_tokens"] == 0
+
+    # Idempotent across --reparse: the max re-accumulates to 216, not the partial 4.
+    assert parse_incremental(config, reparse=True) == 3
+    by_id2 = snapshot()
+    assert by_id2["a1"]["output_tokens"] == 216
+    assert by_id2["a2"]["output_tokens"] == 0
+    assert by_id2["a3"]["output_tokens"] == 0
+    assert sum(r["output_tokens"] for r in by_id2.values()) == 216

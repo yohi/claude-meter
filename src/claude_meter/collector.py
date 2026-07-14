@@ -388,10 +388,26 @@ def parse_incremental(config: Config, *, reparse: bool = False) -> int:
                     try:
                         if not _claim_message_id(conn, message_id, session_id, request_id):
                             # This assistant line is a content-block split (e.g. one of
-                            # several parallel tool_use blocks) of an API response
-                            # already billed via an earlier transcript line sharing the
-                            # same message_id. Zero its usage so the single underlying
-                            # Bedrock invocation is not counted multiple times.
+                            # several parallel tool_use blocks) of an API response already
+                            # billed via an earlier transcript line sharing the same
+                            # message_id. The split lines carry identical input/cache usage
+                            # but a GROWING output_tokens (the complete count appears only
+                            # on the last line), so fold this line's usage into the primary
+                            # row via a component-wise max BEFORE zeroing it -- keeping only
+                            # the first (partial-output) line would under-count output.
+                            assert message_id is not None
+                            _merge_usage_into_primary(
+                                conn,
+                                message_id,
+                                input_tokens,
+                                output_tokens,
+                                cache_creation_input_tokens,
+                                cache_read_input_tokens,
+                                cache_5m,
+                                cache_1h,
+                                web_search,
+                                web_fetch,
+                            )
                             input_tokens = 0
                             output_tokens = 0
                             cache_creation_input_tokens = 0
@@ -546,12 +562,15 @@ def _claim_message_id(
     Claude Code sometimes splits a single real API response (one Bedrock
     invocation, one Anthropic ``message.id``) across multiple ``assistant``
     JSONL lines -- e.g. one line per parallel ``tool_use`` block -- and every
-    split line carries an identical copy of that single response's ``usage``
-    block. Treating each line as its own billing event would multiply the real
-    cost by the number of split lines. Only the first-ever-inserted row for a
-    given ``message_id`` (by insertion order, i.e. lowest ``id``) is primary/
-    billable; the caller must zero usage on later rows sharing the same
-    ``message_id``.
+    split line carries the same single response's ``usage``. Input and cache counts
+    are identical across the split, but ``output_tokens`` GROWS -- the complete
+    output count appears only on the last line. Treating each line as its own
+    billing event would multiply the real cost by the number of split lines. Only
+    the first-ever-inserted row for a given ``message_id`` (by insertion order, i.e.
+    lowest ``id``) is primary/billable; the caller folds each later line's usage
+    into that primary via a component-wise max (see ``_merge_usage_into_primary``)
+    and then zeroes the later row, so the primary carries the response's COMPLETE
+    usage and is billed exactly once.
 
     ``message_id`` is ``None`` for records predating this field (older
     ClaudeCode versions) or otherwise missing it; deduplication is skipped in
@@ -582,6 +601,61 @@ def _claim_message_id(
     if row is None:
         return True
     return bool(row["session_id"] == session_id and row["request_id"] == request_id)
+
+
+def _merge_usage_into_primary(
+    conn: sqlite3.Connection,
+    message_id: str,
+    input_tokens: int,
+    output_tokens: int,
+    cache_creation_input_tokens: int,
+    cache_read_input_tokens: int,
+    cache_creation_5m_tokens: int,
+    cache_creation_1h_tokens: int,
+    web_search_requests: int,
+    web_fetch_requests: int,
+) -> None:
+    """Fold a split line's usage into the primary (lowest-id) row for its message_id.
+
+    Claude Code splits one API response across several ``assistant`` lines sharing a
+    ``message_id``. They carry identical input/cache usage but a GROWING
+    ``output_tokens`` -- the complete output count appears only on the last
+    content-block line. ``_claim_message_id`` keeps the FIRST line as primary, whose
+    output is still partial, so naively zeroing the later lines under-counts output
+    (the bug this fixes).
+
+    Before a duplicate line is zeroed, each usage component is folded into the
+    primary row via a component-wise ``max``, so the primary ends up carrying the
+    response's COMPLETE usage (max output, with input/cache unchanged since they are
+    constant across the split). ``max`` (not sum) is correct because every split
+    line reports the same single response's cumulative usage, not an increment.
+    ``cost_usd`` is reset to NULL so ``fill_missing_costs`` recomputes it from the
+    merged totals.
+    """
+    conn.execute(
+        """UPDATE requests SET
+               input_tokens = max(coalesce(input_tokens, 0), ?),
+               output_tokens = max(coalesce(output_tokens, 0), ?),
+               cache_creation_input_tokens = max(coalesce(cache_creation_input_tokens, 0), ?),
+               cache_read_input_tokens = max(coalesce(cache_read_input_tokens, 0), ?),
+               cache_creation_5m_tokens = max(coalesce(cache_creation_5m_tokens, 0), ?),
+               cache_creation_1h_tokens = max(coalesce(cache_creation_1h_tokens, 0), ?),
+               web_search_requests = max(coalesce(web_search_requests, 0), ?),
+               web_fetch_requests = max(coalesce(web_fetch_requests, 0), ?),
+               cost_usd = NULL
+           WHERE id = (SELECT min(id) FROM requests WHERE message_id = ?)""",
+        (
+            input_tokens,
+            output_tokens,
+            cache_creation_input_tokens,
+            cache_read_input_tokens,
+            cache_creation_5m_tokens,
+            cache_creation_1h_tokens,
+            web_search_requests,
+            web_fetch_requests,
+            message_id,
+        ),
+    )
 
 
 def _insert_usage(conn: sqlite3.Connection, rec: UsageRecord) -> bool:
