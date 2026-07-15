@@ -53,6 +53,12 @@ install_package() {
 
 # Ensure the claude-meter command is reachable on PATH after installation.
 ensure_on_path() {
+	# `curl | sh` runs this installer in a subshell that never sources
+	# ~/.bashrc or ~/.zshrc, so a PATH update written there by uv/pip only
+	# takes effect in a *new* shell. Prepend the common per-user install
+	# directory now so this run can find `claude-meter` without requiring the
+	# user to open a new shell and re-run the script.
+	export PATH="$HOME/.local/bin:$PATH"
 	if ! command -v claude-meter >/dev/null 2>&1; then
 		err "claude-meter was installed but is not on your PATH."
 		err "Open a new shell and re-run this script, or add the install location (e.g. ~/.local/bin) to your PATH."
