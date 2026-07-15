@@ -1,0 +1,146 @@
+"""Tests for scripts/launchers/install.py's template-rendering/escaping logic.
+
+``scripts/launchers/install.py`` is a standalone script (not part of the
+``claude_meter`` package), so it is loaded here via ``importlib`` rather than a
+normal import.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+from types import ModuleType
+
+import pytest
+
+_INSTALL_PY = Path(__file__).resolve().parents[1] / "scripts" / "launchers" / "install.py"
+
+
+def _load_launcher_install() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("launcher_install", _INSTALL_PY)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+launcher_install = _load_launcher_install()
+
+# A path containing every character the escaping helpers must neutralize:
+# single/double quotes, a backslash, a dollar sign, and a backtick.
+TRICKY_NAME = "weird's \"repo\" $(rm -rf) `x` \\ end"
+# Same as above but without a single quote, since a literal single quote is
+# rejected outright for the .desktop format (see module docstring).
+TRICKY_NAME_NO_SQUOTE = 'weird "repo" $(rm -rf) `x` \\ end'
+
+
+@pytest.mark.skipif(shutil.which("sh") is None, reason="requires a POSIX sh")
+def test_escape_posix_shell_roundtrips_special_characters(tmp_path: Path) -> None:
+    token = launcher_install._escape_posix_shell(TRICKY_NAME)
+    result = subprocess.run(
+        ["sh", "-c", f"printf '%s' {token}"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout == TRICKY_NAME
+
+
+def test_escape_posix_shell_rejects_nothing_but_quotes_and_specials() -> None:
+    # Sanity check: the escaped form is always wrapped in single quotes.
+    escaped = launcher_install._escape_posix_shell("/plain/path")
+    assert escaped == "'/plain/path'"
+
+
+def test_escape_cmd_bat_doubles_percent() -> None:
+    assert launcher_install._escape_cmd_bat(r"C:\repo %VAR% end") == '"C:\\repo %%VAR%% end"'
+
+
+def test_escape_cmd_bat_rejects_double_quote() -> None:
+    with pytest.raises(ValueError, match="double quote"):
+        launcher_install._escape_cmd_bat('C:\\evil"path')
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="requires bash")
+def test_render_template_desktop_exec_roundtrips_special_characters(tmp_path: Path) -> None:
+    repo_root = tmp_path / TRICKY_NAME_NO_SQUOTE
+    repo_root.mkdir()
+    template = (
+        Path(__file__).resolve().parents[1] / "scripts" / "launchers" / "claude-meter.desktop.tmpl"
+    )
+
+    rendered = launcher_install.render_template(template, repo_root)
+
+    exec_line = next(line for line in rendered.splitlines() if line.startswith("Exec="))
+    match = re.match(r"^Exec=bash -c '(.*)'$", exec_line)
+    assert match is not None
+    bash_cmd = match.group(1)
+    # Replace the real command with a no-op so the test doesn't actually try
+    # to launch claude-meter; then print the directory bash actually `cd`'d
+    # into to confirm the repository root round-tripped correctly.
+    bash_cmd = bash_cmd.replace("claude-meter start", "true").replace(
+        'exec "$SHELL"', "pwd"
+    )
+    result = subprocess.run(
+        ["bash", "-c", bash_cmd],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout.strip() == str(repo_root.resolve())
+
+    icon_line = next(line for line in rendered.splitlines() if line.startswith("Icon="))
+    assert icon_line == f"Icon={repo_root}/assets/icon.png"
+
+
+def test_render_template_desktop_rejects_single_quote(tmp_path: Path) -> None:
+    repo_root = tmp_path / "has'quote"
+    template = (
+        Path(__file__).resolve().parents[1] / "scripts" / "launchers" / "claude-meter.desktop.tmpl"
+    )
+    with pytest.raises(ValueError, match="single quote"):
+        launcher_install.render_template(template, repo_root)
+
+
+def test_render_template_rejects_line_breaks(tmp_path: Path) -> None:
+    repo_root = tmp_path / "line\nbreak"
+    template = (
+        Path(__file__).resolve().parents[1] / "scripts" / "launchers" / "claude-meter.command.tmpl"
+    )
+    with pytest.raises(ValueError, match="line break"):
+        launcher_install.render_template(template, repo_root)
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="requires bash")
+def test_render_template_command_roundtrips_special_characters(tmp_path: Path) -> None:
+    repo_root = tmp_path / TRICKY_NAME
+    repo_root.mkdir()
+    template = (
+        Path(__file__).resolve().parents[1] / "scripts" / "launchers" / "claude-meter.command.tmpl"
+    )
+
+    rendered = launcher_install.render_template(template, repo_root)
+    cd_line = next(line for line in rendered.splitlines() if line.startswith("cd "))
+    result = subprocess.run(
+        ["bash", "-c", f"{cd_line} && pwd"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout.strip() == str(repo_root.resolve())
+
+
+def test_render_template_bat_embeds_quoted_cmd_argument(tmp_path: Path) -> None:
+    repo_root = tmp_path / "C:\\Users\\Jane Doe\\claude-meter"
+    template = (
+        Path(__file__).resolve().parents[1] / "scripts" / "launchers" / "claude-meter.bat.tmpl"
+    )
+    rendered = launcher_install.render_template(template, repo_root)
+    cd_line = next(line for line in rendered.splitlines() if line.startswith("cd /d "))
+    assert cd_line == f'cd /d "{repo_root}"'
