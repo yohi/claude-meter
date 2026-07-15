@@ -98,6 +98,19 @@ jobs:
             cp README.md bitbucket-repo/
           fi
 
+          # install_bitbucket.sh.tmpl / install_bitbucket.ps1.tmpl のプレースホルダーを実値に置換してコピー
+          if [ -e install_bitbucket.sh.tmpl ]; then
+            sed -e "s/<BITBUCKET_WORKSPACE_NAME>/${BITBUCKET_WORKSPACE_NAME}/g" \
+                -e "s/<BITBUCKET_REPOSITORY_NAME>/${BITBUCKET_REPOSITORY_NAME}/g" \
+                install_bitbucket.sh.tmpl > bitbucket-repo/install.sh
+            chmod +x bitbucket-repo/install.sh
+          fi
+          if [ -e install_bitbucket.ps1.tmpl ]; then
+            sed -e "s/<BITBUCKET_WORKSPACE_NAME>/${BITBUCKET_WORKSPACE_NAME}/g" \
+                -e "s/<BITBUCKET_REPOSITORY_NAME>/${BITBUCKET_REPOSITORY_NAME}/g" \
+                install_bitbucket.ps1.tmpl > bitbucket-repo/install.ps1
+          fi
+
           # コピー先フォルダの作成
           mkdir -p "bitbucket-repo/packages/$PACKAGE_NAME/"
 
