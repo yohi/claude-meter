@@ -24,11 +24,17 @@
         $Headers = @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$env:BITBUCKET_USER`:$env:BITBUCKET_APP_PASSWORD")) }
 
     Downloading to a temp file first (rather than piping `irm` directly into
-    `iex`) means the script only runs after the download has completed
-    successfully, so a connection drop mid-transfer can never execute a
-    truncated script; the temp file is removed afterwards regardless of the
-    outcome. For safety, review the downloaded script's contents (the temp
-    file below) before it runs.
+    `iex`) means the download must complete fully before anything runs, so a
+    connection drop mid-transfer can never execute a truncated script. The
+    downloaded content is then piped into `Invoke-Expression` rather than
+    executed as a script file directly: `Invoke-WebRequest` marks downloaded
+    files with a Zone.Identifier (Mark of the Web), and running such an
+    unsigned `.ps1` file directly would be blocked under the `RemoteSigned`
+    execution policy (a common default, e.g. on Windows Server);
+    `Invoke-Expression` evaluates the content as a string rather than running
+    a script file, so it isn't subject to that restriction. The temp file is
+    removed afterwards regardless of the outcome. For safety, review the
+    downloaded script's contents (the temp file below) before it runs.
 
     Note: this script itself is fetched from the `master` branch above, so the
     bootstrap fetch is not integrity-pinned; only the *installed* claude-meter
@@ -43,7 +49,7 @@
     try {
         $Headers = @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$env:BITBUCKET_USER`:$env:BITBUCKET_APP_PASSWORD")) }
         Invoke-WebRequest -Headers $Headers -Uri "https://bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/<BITBUCKET_REPOSITORY_NAME>/raw/master/install.ps1" -OutFile $tmp
-        & $tmp
+        Get-Content -Raw -Path $tmp | Invoke-Expression
     } finally {
         Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue
     }
