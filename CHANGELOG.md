@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.9.0](https://github.com/yohi/claude-meter/compare/v0.8.0...v0.9.0) (2026-07-15)
+
+
+### Features
+
+* Bitbucket経由のワンラインインストーラーを追加 ([32b40b7](https://github.com/yohi/claude-meter/commit/32b40b7230079f7b02b3df7b44fd4f7cfc8bd533))
+* GitHub raw経由のワンラインインストーラーを追加 ([4ea4c97](https://github.com/yohi/claude-meter/commit/4ea4c977afa3fdabf4f14a0ad2b5771eea6f173a))
+* Windows/macOS/Linux向けデスクトップランチャーを追加 ([23d7c07](https://github.com/yohi/claude-meter/commit/23d7c0713d01d1b1ecd7682eea40086faa08cdf1))
+
+
+### Bug Fixes
+
+* BitbucketインストーラーでApp passwordがプロセスリストに露出する問題を修正 ([5f95a97](https://github.com/yohi/claude-meter/commit/5f95a97b21378f1eadbb841078f616ce786c4de2))
+* curl|shインストーラーでPATH未反映によるensure_on_path失敗を修正 ([54e1c72](https://github.com/yohi/claude-meter/commit/54e1c721aa86c06280b6ec10a185ef3b1d51e4b9))
+* install.ps1で固定タグなしのmaster HEADを直接インストールする問題を修正 ([dc999c3](https://github.com/yohi/claude-meter/commit/dc999c33a1a8a2c728e2774a71d9d82ee2319afc))
+* install.ps1系の.EXAMPLEのInvoke-WebRequestに-ErrorAction Stopを追加 ([4b37f2c](https://github.com/yohi/claude-meter/commit/4b37f2c3ef96901bd67e0910e48afab297154678))
+* install.shで固定タグなしのmaster HEADを直接インストールする問題を修正 ([84a75cb](https://github.com/yohi/claude-meter/commit/84a75cbd99c2c998b85f2f0d14c46f6b0c323e85))
+* POSIX版ワンラインインストーラーの複数のセキュリティ・信頼性問題を修正 ([eb185ca](https://github.com/yohi/claude-meter/commit/eb185ca01e4d2bc56d699d12ff47329e3ec8e07b))
+* PowerShellインストーラーでpipフォールバック時のPATH未反映を修正 ([3dd59e3](https://github.com/yohi/claude-meter/commit/3dd59e34357568d04da4dd80725b8a9d2973f224))
+* PowerShellワンライナーがExecutionPolicyで失敗する問題を修正 ([95c4f90](https://github.com/yohi/claude-meter/commit/95c4f900fb26ac45c298e976a67cead2053fb748))
+* PowerShell版ワンラインインストーラーの複数のセキュリティ・信頼性問題を修正 ([1682f57](https://github.com/yohi/claude-meter/commit/1682f5776a28a9c3d013e69f55f14c8bb60a1f35))
+* release-please.ymlのsed区切り文字衝突による置換破損を防止 ([fe32b2c](https://github.com/yohi/claude-meter/commit/fe32b2c769b3736d0af2d70c6b6c50a06e43f71c))
+* デスクトップランチャー生成でリポジトリパスをエスケープせず埋め込む問題を修正 ([813240f](https://github.com/yohi/claude-meter/commit/813240f9ccdf11fd1409660c4f9b2cbb8430d177))
+* ワンライナーインストールをcurl|sh直接実行から一時ファイル経由の実行に変更 ([05787b7](https://github.com/yohi/claude-meter/commit/05787b7b9ec1f69ec8e8a2cee8ae8254b3f03464))
+* ワンライナー例の終了コード欠落とPowerShell例のエラー握り潰しを修正 ([240cc55](https://github.com/yohi/claude-meter/commit/240cc55e6ec2e9c55c1013d70a30345597d19eb7))
+
+
+### Documentation
+
+* ワンラインインストーラーの制約とセキュアな認証手順をREADMEに反映 ([e72f0fa](https://github.com/yohi/claude-meter/commit/e72f0fad45ba12353ca6e318cb52d2cdf2589a06))
+* 推定コストとAWS実額の分類差に関する既知制約を追記 ([0c633ad](https://github.com/yohi/claude-meter/commit/0c633ad620432b79fee243259f7746fa329b77d0))
+* 推定コストとAWS実額の分類差に関する既知制約を追記 ([fde75d3](https://github.com/yohi/claude-meter/commit/fde75d31bcc5c123b7d2f107b7d97e6bb4790743)), closes [#48](https://github.com/yohi/claude-meter/issues/48)
+
 ## [0.8.0](https://github.com/yohi/claude-meter/compare/v0.7.1...v0.8.0) (2026-07-14)
 
 
