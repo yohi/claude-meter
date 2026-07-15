@@ -101,6 +101,39 @@ so.
 | `claude-meter pricing update [--force]` | Refresh Bedrock pricing cache |
 | `claude-meter config` | Show the config file path |
 
+## Desktop launcher (double-click)
+
+Note: this launcher generator (`scripts/launchers/install.py`) is for
+developers who have cloned the repository locally. If you used the one-line
+`curl` / `irm` installer above, the desktop launcher was already created for
+you, so you can skip this section.
+
+To launch the dashboard without a terminal, install a double-clickable
+launcher that runs `claude-meter start` for you. One command generates the
+right launcher for your OS:
+
+```bash
+python scripts/launchers/install.py
+```
+
+This renders the OS-specific template under `scripts/launchers/` and writes it
+to a ready-to-use location:
+
+| OS | Generated launcher |
+| --- | --- |
+| Linux | `~/.local/share/applications/claude-meter.desktop` |
+| macOS | `~/Desktop/claude-meter.command` (marked executable) |
+| Windows | `%USERPROFILE%\Desktop\claude-meter.bat` |
+
+The launcher only calls the `claude-meter` command, so that command must be on
+your `PATH` first (e.g. after `pip install -e .` or `uv tool install .`).
+
+To use a custom icon, place an image at `assets/icon.png`; the Linux
+`.desktop` entry references it automatically. On macOS you must set the
+icon manually (select the `.command` file in Finder, press Cmd+I, then
+drag an image onto the icon in the title bar). On Windows, create a
+shortcut to the `.bat` and set its icon via Properties -> Change Icon.
+
 ## Configuration
 
 `~/.claude-meter/config.yaml`:
