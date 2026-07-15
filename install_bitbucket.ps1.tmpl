@@ -55,21 +55,35 @@ if (-not $env:BITBUCKET_APP_PASSWORD) {
     throw "BITBUCKET_APP_PASSWORD is not set. Set `$env:BITBUCKET_APP_PASSWORD before running this script."
 }
 
-# Embed the credentials in the URL only for the duration of this install
-# invocation; nothing is written to disk.
-$RepoUrl = "git+https://$($env:BITBUCKET_USER):$($env:BITBUCKET_APP_PASSWORD)@bitbucket.org/$BitbucketWorkspaceName/$BitbucketRepositoryName.git"
+# Provide the Bitbucket App password via a GIT_ASKPASS helper instead of
+# embedding it in the repo URL. Credentials passed as a process command-line
+# argument (e.g. inside a URL) can be read by other processes/users on this
+# host for the duration of the install (e.g. via Get-CimInstance
+# Win32_Process); GIT_ASKPASS avoids that exposure, and nothing beyond a
+# short-lived temp script (which only references the env var name, never
+# the password value) is written to disk. This mirrors the pattern already
+# used for git auth in .github/workflows/release-please.yml.
+$AskPassPath = Join-Path ([System.IO.Path]::GetTempPath()) "claude-meter-askpass-$([Guid]::NewGuid()).cmd"
+Set-Content -Path $AskPassPath -Value "@echo %BITBUCKET_APP_PASSWORD%" -Encoding ascii
+try {
+    $env:GIT_ASKPASS = $AskPassPath
+    $RepoUrl = "git+https://$($env:BITBUCKET_USER)@bitbucket.org/$BitbucketWorkspaceName/$BitbucketRepositoryName.git"
 
-# 1. Install the package with the first available installer.
-if (Test-CommandExists -Name "uv") {
-    Write-Host "==> Installing claude-meter with uv (uv tool install)..."
-    uv tool install $RepoUrl
+    # 1. Install the package with the first available installer.
+    if (Test-CommandExists -Name "uv") {
+        Write-Host "==> Installing claude-meter with uv (uv tool install)..."
+        uv tool install $RepoUrl
+    }
+    elseif (Test-CommandExists -Name "python") {
+        Write-Host "==> uv not found; installing claude-meter with python -m pip (--user)..."
+        python -m pip install --user $RepoUrl
+    }
+    else {
+        throw "No suitable installer found: neither uv nor python is available. Install uv first, then re-run this script: $UvInstallDocs"
+    }
 }
-elseif (Test-CommandExists -Name "python") {
-    Write-Host "==> uv not found; installing claude-meter with python -m pip (--user)..."
-    python -m pip install --user $RepoUrl
-}
-else {
-    throw "No suitable installer found: neither uv nor python is available. Install uv first, then re-run this script: $UvInstallDocs"
+finally {
+    Remove-Item -Path $AskPassPath -Force -ErrorAction SilentlyContinue
 }
 
 # 2. Verify the command is reachable on PATH.

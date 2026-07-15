@@ -53,9 +53,20 @@ require_credentials() {
 # CLAUDE_METER_INSTALL_LIB=1) and exercise the launcher logic without running
 # a real package installation.
 install_package() {
-	# The credentials are embedded in the URL only for the duration of this
-	# install invocation; nothing is written to disk.
-	repo_url="git+https://${BITBUCKET_USER}:${BITBUCKET_APP_PASSWORD}@bitbucket.org/${BITBUCKET_WORKSPACE_NAME}/${BITBUCKET_REPOSITORY_NAME}.git"
+	# Provide the Bitbucket App password via a GIT_ASKPASS helper instead of
+	# embedding it in the repo URL. Credentials passed as CLI arguments (e.g.
+	# inside a URL) are visible to other users on this host for the duration
+	# of the process via `ps aux` / `/proc/{pid}/cmdline`; GIT_ASKPASS avoids
+	# that exposure entirely, and nothing is written to disk beyond a
+	# short-lived temp script that only references the env var name (the
+	# password value itself is never persisted). This mirrors the pattern
+	# already used for git auth in .github/workflows/release-please.yml.
+	askpass_script="$(mktemp)"
+	trap 'rm -f "$askpass_script"' EXIT
+	printf '#!/bin/sh\necho "$BITBUCKET_APP_PASSWORD"\n' >"$askpass_script"
+	chmod +x "$askpass_script"
+	export GIT_ASKPASS="$askpass_script"
+	repo_url="git+https://${BITBUCKET_USER}@bitbucket.org/${BITBUCKET_WORKSPACE_NAME}/${BITBUCKET_REPOSITORY_NAME}.git"
 	if command -v uv >/dev/null 2>&1; then
 		info "Installing claude-meter with uv (uv tool install)..."
 		uv tool install "$repo_url"
