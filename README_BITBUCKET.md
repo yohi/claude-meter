@@ -21,11 +21,13 @@ uv run claude-meter start   # または: uv run cm start
 ```bash
 export BITBUCKET_USER=<your-bitbucket-username>
 export BITBUCKET_APP_PASSWORD=<your-app-password>
-printf 'user = "%s:%s"\n' "$BITBUCKET_USER" "$BITBUCKET_APP_PASSWORD" | curl -fsSL -K - \
-  https://bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/<BITBUCKET_REPOSITORY_NAME>/raw/master/install.sh | sh
+tmp="$(mktemp)" && printf 'user = "%s:%s"\n' "$BITBUCKET_USER" "$BITBUCKET_APP_PASSWORD" \
+  | curl -fsSL -K - -o "$tmp" \
+  https://bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/<BITBUCKET_REPOSITORY_NAME>/raw/master/install.sh \
+  && sh "$tmp"; rm -f "$tmp"
 ```
 
-上記のコマンドはリモートのスクリプトを直接シェルにパイプして実行します。安全のため、実行前にスクリプトの内容を必ず確認することを推奨します。
+上記のコマンドはリモートのスクリプトを一時ファイルにダウンロードしてから実行します。`curl` が完全に成功した場合のみ `sh` が実行されるため、ダウンロード中に回線が切断されて不完全なスクリプトが実行されてしまうリスクを防げます。一時ファイルは実行後（失敗時も含め）に削除されます。安全のため、実行前にスクリプトの内容を必ず確認することを推奨します。
 
 `curl -u "$BITBUCKET_USER:$BITBUCKET_APP_PASSWORD"` は展開後の認証情報がそのまま `curl` の
 コマンドライン引数として渡され、実行中は同じホスト上の他ユーザーが `ps aux` や

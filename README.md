@@ -18,16 +18,27 @@ desktop launcher automatically:
 
 <!-- markdownlint-disable MD013 -->
 ```bash
-curl -fsSL https://raw.githubusercontent.com/yohi/claude-meter/master/install.sh | sh
+tmp="$(mktemp)" && curl -fsSL -o "$tmp" https://raw.githubusercontent.com/yohi/claude-meter/master/install.sh \
+  && sh "$tmp"; rm -f "$tmp"
 ```
 
 ```powershell
-irm https://raw.githubusercontent.com/yohi/claude-meter/master/install.ps1 | iex
+$tmp = Join-Path ([System.IO.Path]::GetTempPath()) "claude-meter-install-$([Guid]::NewGuid()).ps1"
+try {
+    Invoke-WebRequest -Uri "https://raw.githubusercontent.com/yohi/claude-meter/master/install.ps1" -OutFile $tmp
+    & $tmp
+} finally {
+    Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue
+}
 ```
 <!-- markdownlint-enable MD013 -->
 
-Because these commands pipe a remote script straight into your shell, review
-the script contents before running.
+These commands download the installer to a temp file, run it, then remove
+the temp file, rather than piping the remote script straight into your
+shell — that way the installer only runs after the download has completed
+successfully, so a connection drop mid-transfer can never execute a
+truncated script. For safety, review the downloaded script's contents
+before it runs.
 
 Note: this fetches `install.sh`/`install.ps1` from the `master` branch, so the
 bootstrap fetch itself is not pinned to an immutable release; only the

@@ -2,10 +2,16 @@
 # claude-meter one-line installer (Linux / macOS, POSIX sh).
 #
 # Intended usage:
-#     curl -fsSL https://raw.githubusercontent.com/yohi/claude-meter/master/install.sh | sh
+#     tmp="$(mktemp)" && curl -fsSL -o "$tmp" \
+#       https://raw.githubusercontent.com/yohi/claude-meter/master/install.sh \
+#       && sh "$tmp"; rm -f "$tmp"
 #
-# This downloads and runs a remote script directly in your shell. For safety,
-# review the contents of this script before piping it into `sh`.
+# Downloading to a temp file first (rather than piping curl directly into
+# `sh`) means `sh` only runs after `curl` has exited successfully, so a
+# connection drop mid-transfer can never execute a truncated script; the
+# temp file is removed afterwards regardless of the outcome. For safety,
+# review the downloaded script's contents (the temp file above) before it
+# runs.
 #
 # What it does:
 #   1. Installs the `claude-meter` command from GitHub (uv, then pip3, then
@@ -27,7 +33,7 @@ set -eu
 
 # Base git+https URL (without a ref). A specific ref (a release tag, by
 # default) is appended by resolve_ref()/install_package() below so that a
-# plain `curl | sh` never installs an unreviewed `master` HEAD.
+# plain one-line install never installs an unreviewed `master` HEAD.
 REPO_BASE_URL="git+https://github.com/yohi/claude-meter.git"
 GITHUB_RELEASES_LATEST_URL="https://github.com/yohi/claude-meter/releases/latest"
 UV_INSTALL_DOCS="https://docs.astral.sh/uv/getting-started/installation/"
@@ -90,8 +96,9 @@ install_package() {
 
 # Ensure the claude-meter command is reachable on PATH after installation.
 ensure_on_path() {
-	# `curl | sh` runs this installer in a subshell that never sources
-	# ~/.bashrc or ~/.zshrc, so a PATH update written there by uv/pip only
+	# Running this installer with `sh` (whether piped or from a downloaded
+	# temp file) executes it in a subshell that never sources ~/.bashrc or
+	# ~/.zshrc, so a PATH update written there by uv/pip only
 	# takes effect in a *new* shell. Resolve the *actual* per-user scripts
 	# directory for the Python that performed the install -- this varies by
 	# platform/interpreter (e.g. ~/Library/Python/X.Y/bin on macOS framework
