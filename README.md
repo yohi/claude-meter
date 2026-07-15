@@ -29,6 +29,14 @@ irm https://raw.githubusercontent.com/yohi/claude-meter/master/install.ps1 | iex
 Because these commands pipe a remote script straight into your shell, review
 the script contents before running.
 
+Note: this fetches `install.sh`/`install.ps1` from the `master` branch, so the
+bootstrap fetch itself is not pinned to an immutable release; only the
+*installed* `claude-meter` package version is pinned to the latest published
+release tag (the scripts abort rather than silently installing from an
+unreviewed `master` HEAD if that resolution fails). To pin the bootstrap
+fetch too, download the script from a specific tag/commit URL instead (e.g.
+`.../raw/<tag-or-sha>/install.sh`).
+
 With `uvx` (running directly from the built package or repository on Bitbucket):
 
 <!-- markdownlint-disable MD013 -->

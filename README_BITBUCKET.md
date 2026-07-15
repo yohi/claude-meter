@@ -21,11 +21,21 @@ uv run claude-meter start   # または: uv run cm start
 ```bash
 export BITBUCKET_USER=<your-bitbucket-username>
 export BITBUCKET_APP_PASSWORD=<your-app-password>
-curl -fsSL -u "$BITBUCKET_USER:$BITBUCKET_APP_PASSWORD" \
+printf 'user = "%s:%s"\n' "$BITBUCKET_USER" "$BITBUCKET_APP_PASSWORD" | curl -fsSL -K - \
   https://bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/<BITBUCKET_REPOSITORY_NAME>/raw/master/install.sh | sh
 ```
 
 上記のコマンドはリモートのスクリプトを直接シェルにパイプして実行します。安全のため、実行前にスクリプトの内容を必ず確認することを推奨します。
+
+`curl -u "$BITBUCKET_USER:$BITBUCKET_APP_PASSWORD"` は展開後の認証情報がそのまま `curl` の
+コマンドライン引数として渡され、実行中は同じホスト上の他ユーザーが `ps aux` や
+`/proc/{pid}/cmdline` から読み取れてしまいます。上記のコマンドは代わりに認証情報を標準入力経由の
+設定ファイルとして `curl -K -` に渡すため、プロセス引数には一切現れません。
+
+なお、この `curl` コマンド自体は `master` ブランチから取得するため、取得元スクリプトそのものは
+改版不変（immutable）な参照には固定されていません。インストールされる `claude-meter`
+パッケージ自体は、インストーラーがBitbucket APIから解決した最新タグに固定され、解決に失敗した
+場合は未レビューのデフォルトブランチへフォールバックせず処理を中断します。
 <!-- markdownlint-enable MD013 -->
 
 ### `uvx` を使用する場合（Bitbucketリポジトリから直接実行）
