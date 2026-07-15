@@ -9,11 +9,19 @@
 #
 # What it does:
 #   1. Installs the `claude-meter` command from GitHub (uv, then pip3, then
-#      python3 -m pip as fallbacks).
+#      python3 -m pip as fallbacks), pinned to the latest published release
+#      tag (see resolve_ref() below).
 #   2. Verifies the command is on your PATH.
 #   3. Runs `claude-meter init`.
 #   4. Creates a double-clickable desktop launcher that runs `claude-meter start`
 #      (no local repository clone required).
+#
+# Note: this script itself is fetched from the `master` branch above, so the
+# bootstrap fetch is not integrity-pinned; only the *installed* claude-meter
+# package version is pinned to a release tag by resolve_ref(), which aborts
+# rather than silently falling back to an unreviewed `master` HEAD if that
+# resolution fails. To pin the bootstrap fetch too, download this script from
+# a specific tag/commit URL instead (e.g. .../raw/<tag-or-sha>/install.sh).
 
 set -eu
 
@@ -51,8 +59,10 @@ resolve_ref() {
 			return
 		fi
 	fi
-	err "Could not determine the latest release tag; falling back to the master branch (unreviewed HEAD)."
-	printf 'master'
+	err "Could not determine the latest release tag from ${GITHUB_RELEASES_LATEST_URL}."
+	err "Refusing to install an unreviewed master HEAD. Set CLAUDE_METER_REF to a"
+	err 'specific tag, a commit SHA, or "master" to opt in explicitly, then re-run this script.'
+	exit 1
 }
 
 # Install the claude-meter package using the first available installer.
@@ -82,10 +92,22 @@ install_package() {
 ensure_on_path() {
 	# `curl | sh` runs this installer in a subshell that never sources
 	# ~/.bashrc or ~/.zshrc, so a PATH update written there by uv/pip only
-	# takes effect in a *new* shell. Prepend the common per-user install
-	# directory now so this run can find `claude-meter` without requiring the
-	# user to open a new shell and re-run the script.
-	export PATH="$HOME/.local/bin:$PATH"
+	# takes effect in a *new* shell. Resolve the *actual* per-user scripts
+	# directory for the Python that performed the install -- this varies by
+	# platform/interpreter (e.g. ~/Library/Python/X.Y/bin on macOS framework
+	# Python vs. ~/.local/bin on most Linux distros) -- and prepend it, along
+	# with the common ~/.local/bin fallback, so this run can find
+	# `claude-meter` without requiring the user to open a new shell and
+	# re-run the script.
+	user_scripts_dir=""
+	if command -v python3 >/dev/null 2>&1; then
+		user_scripts_dir="$(python3 -c "import sysconfig; print(sysconfig.get_path('scripts', 'posix_user'))" 2>/dev/null || true)"
+	fi
+	if [ -n "$user_scripts_dir" ]; then
+		export PATH="$user_scripts_dir:$HOME/.local/bin:$PATH"
+	else
+		export PATH="$HOME/.local/bin:$PATH"
+	fi
 	if ! command -v claude-meter >/dev/null 2>&1; then
 		err "claude-meter was installed but is not on your PATH."
 		err "Open a new shell and re-run this script, or add the install location (e.g. ~/.local/bin) to your PATH."
@@ -104,13 +126,19 @@ run_init() {
 # is no `cd` into a repo directory and no reference to repo-local files.
 create_launcher() {
 	os="$(uname -s)"
+	# Embed the *resolved* absolute path rather than a bare `claude-meter`
+	# command name: double-clicking a desktop/GUI launcher does not always
+	# inherit this session's PATH (see ensure_on_path above), so relying on
+	# PATH lookup again here would silently fail in exactly the case this
+	# launcher exists to solve.
+	claude_meter_path="$(command -v claude-meter)"
 	if [ "$os" = "Darwin" ]; then
 		launcher="$HOME/Desktop/claude-meter.command"
 		info "Creating macOS launcher: $launcher"
 		mkdir -p "$HOME/Desktop"
-		cat >"$launcher" <<'LAUNCHER'
+		cat >"$launcher" <<LAUNCHER
 #!/bin/bash
-claude-meter start
+"$claude_meter_path" start
 LAUNCHER
 		chmod +x "$launcher"
 	else
@@ -118,12 +146,12 @@ LAUNCHER
 		launcher="$launcher_dir/claude-meter.desktop"
 		info "Creating Linux desktop launcher: $launcher"
 		mkdir -p "$launcher_dir"
-		cat >"$launcher" <<'LAUNCHER'
+		cat >"$launcher" <<LAUNCHER
 [Desktop Entry]
 Type=Application
 Name=claude-meter
 Comment=Local ClaudeCode usage and cost dashboard
-Exec=bash -c 'claude-meter start; exec "$SHELL"'
+Exec=bash -c '"$claude_meter_path" start; exec "\$SHELL"'
 Icon=utilities-terminal
 Terminal=true
 Categories=Utility;Development;
