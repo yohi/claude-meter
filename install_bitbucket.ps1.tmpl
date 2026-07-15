@@ -1,0 +1,157 @@
+<#
+.SYNOPSIS
+    One-line installer for claude-meter on Windows (PowerShell), from Bitbucket.
+
+.DESCRIPTION
+    Installs the claude-meter CLI directly from a PRIVATE Bitbucket repository
+    using uv (preferred) or pip as a fallback, runs `claude-meter init`, and
+    creates a double-clickable desktop launcher (claude-meter.bat) that runs
+    `claude-meter start`. No local repository clone is required.
+
+    Because the source repository is private, this installer requires a
+    Bitbucket App password with the "Repositories: Read" scope. Provide the
+    credentials through environment variables so they do NOT remain in your
+    shell history or on screen:
+
+        $env:BITBUCKET_USER = "<your-bitbucket-username>"
+        $env:BITBUCKET_APP_PASSWORD = "<your-app-password>"
+
+    Bitbucket's raw endpoint requires HTTP Basic authentication, so add an
+    Authorization header when fetching and running this script with irm
+    (note the backtick before the colon so PowerShell does not treat it as a
+    drive-qualified variable):
+
+        irm -Headers @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$env:BITBUCKET_USER`:$env:BITBUCKET_APP_PASSWORD")) } https://bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/<BITBUCKET_REPOSITORY_NAME>/raw/master/install.ps1 | iex
+
+    This command downloads and runs a remote script directly in your shell. For
+    safety, review the contents of this script before piping it into your shell.
+
+    Note: this script itself is fetched from the `master` branch above, so the
+    bootstrap fetch is not integrity-pinned; only the *installed* claude-meter
+    package version is pinned to a tag by Resolve-Ref() below (queried from the
+    Bitbucket API), which throws rather than silently falling back to an
+    unpinned default-branch HEAD if that resolution fails.
+
+.EXAMPLE
+    $env:BITBUCKET_USER = "<your-bitbucket-username>"
+    $env:BITBUCKET_APP_PASSWORD = "<your-app-password>"
+    irm -Headers @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$env:BITBUCKET_USER`:$env:BITBUCKET_APP_PASSWORD")) } https://bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/<BITBUCKET_REPOSITORY_NAME>/raw/master/install.ps1 | iex
+
+    Downloads and runs the installer in the current PowerShell session.
+#>
+
+$ErrorActionPreference = "Stop"
+
+$BitbucketWorkspaceName = "<BITBUCKET_WORKSPACE_NAME>"
+$BitbucketRepositoryName = "<BITBUCKET_REPOSITORY_NAME>"
+$UvInstallDocs = "https://docs.astral.sh/uv/getting-started/installation/"
+
+function Test-CommandExists {
+    param([Parameter(Mandatory = $true)][string]$Name)
+    return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+# Resolve the git tag to install. Defaults to the latest tag on the private
+# Bitbucket repository (queried via the Bitbucket API using the same
+# credentials required below) so this installer is pinned to a specific,
+# reviewed release instead of an unpinned default-branch HEAD. Set
+# $env:CLAUDE_METER_REF to override (e.g. to a specific tag or commit SHA).
+function Resolve-Ref {
+    if ($env:CLAUDE_METER_REF) {
+        return $env:CLAUDE_METER_REF
+    }
+    try {
+        $AuthHeader = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($env:BITBUCKET_USER):$($env:BITBUCKET_APP_PASSWORD)"))
+        $TagsUrl = "https://api.bitbucket.org/2.0/repositories/$BitbucketWorkspaceName/$BitbucketRepositoryName/refs/tags?sort=-target.date&pagelen=1"
+        $Response = Invoke-RestMethod -Uri $TagsUrl -Headers @{ Authorization = $AuthHeader }
+        if ($Response.values -and $Response.values.Count -gt 0) {
+            return $Response.values[0].name
+        }
+    }
+    catch {
+        # Fall through to the throw below.
+    }
+    throw "Could not determine the latest tag from the Bitbucket API (workspace=$BitbucketWorkspaceName, repo=$BitbucketRepositoryName). Refusing to install an unpinned default-branch HEAD. Set `$env:CLAUDE_METER_REF to a specific tag or commit SHA, then re-run this script."
+}
+
+Write-Host "==> Starting claude-meter installation..."
+
+# 0. Require Bitbucket credentials (App password with the Repositories: Read scope).
+if (-not $env:BITBUCKET_USER) {
+    throw "BITBUCKET_USER is not set. Set `$env:BITBUCKET_USER before running this script."
+}
+if (-not $env:BITBUCKET_APP_PASSWORD) {
+    throw "BITBUCKET_APP_PASSWORD is not set. Set `$env:BITBUCKET_APP_PASSWORD before running this script."
+}
+
+# Provide the Bitbucket App password via a GIT_ASKPASS helper instead of
+# embedding it in the repo URL. Credentials passed as a process command-line
+# argument (e.g. inside a URL) can be read by other processes/users on this
+# host for the duration of the install (e.g. via Get-CimInstance
+# Win32_Process); GIT_ASKPASS avoids that exposure, and nothing beyond a
+# short-lived temp script (which only references the env var name, never
+# the password value) is written to disk. This mirrors the pattern already
+# used for git auth in .github/workflows/release-please.yml.
+$AskPassPath = Join-Path ([System.IO.Path]::GetTempPath()) "claude-meter-askpass-$([Guid]::NewGuid()).cmd"
+Set-Content -Path $AskPassPath -Value "@echo %BITBUCKET_APP_PASSWORD%" -Encoding ascii
+try {
+    $env:GIT_ASKPASS = $AskPassPath
+    $Ref = Resolve-Ref
+    $RepoUrl = "git+https://$($env:BITBUCKET_USER)@bitbucket.org/$BitbucketWorkspaceName/$BitbucketRepositoryName.git@$Ref"
+
+    # 1. Install the package with the first available installer.
+    if (Test-CommandExists -Name "uv") {
+        Write-Host "==> Installing claude-meter $Ref with uv (uv tool install)..."
+        uv tool install $RepoUrl
+    }
+    elseif (Test-CommandExists -Name "python") {
+        Write-Host "==> uv not found; installing claude-meter $Ref with python -m pip (--user)..."
+        python -m pip install --user $RepoUrl
+
+        # `python -m pip install --user` places console scripts in the
+        # per-user Scripts directory (e.g. %APPDATA%\Python\PythonXY\Scripts),
+        # which is not part of the current PowerShell session's PATH even
+        # when a Python installer has added it to the persistent user PATH.
+        # Prepend it now so this run can find `claude-meter` without
+        # requiring a new shell.
+        $UserScriptsDir = (python -c "import sysconfig; print(sysconfig.get_path('scripts', 'nt_user'))" 2>$null)
+        if ($UserScriptsDir -and (Test-Path $UserScriptsDir)) {
+            $env:PATH = "$UserScriptsDir;$env:PATH"
+        }
+    }
+    else {
+        throw "No suitable installer found: neither uv nor python is available. Install uv first, then re-run this script: $UvInstallDocs"
+    }
+}
+finally {
+    Remove-Item -Path $AskPassPath -Force -ErrorAction SilentlyContinue
+    Remove-Item Env:GIT_ASKPASS -ErrorAction SilentlyContinue
+}
+
+# 2. Verify the command is reachable on PATH and resolve its absolute path.
+# Desktop/GUI launches (double-clicking claude-meter.bat below) do not always
+# inherit this session's PATH, so the launcher embeds this resolved path
+# directly rather than relying on a bare `claude-meter` command lookup.
+$ClaudeMeterCommand = Get-Command -Name "claude-meter" -ErrorAction SilentlyContinue
+if (-not $ClaudeMeterCommand) {
+    throw "claude-meter was installed but is not on your PATH. Open a new terminal and re-run this script, or add the install location to your PATH."
+}
+$ClaudeMeterPath = $ClaudeMeterCommand.Source
+
+# 3. Run first-time initialization.
+Write-Host "==> Initializing claude-meter (claude-meter init)..."
+claude-meter init
+
+# 4. Create a double-clickable desktop launcher that runs `claude-meter start`.
+Write-Host "==> Creating Windows desktop launcher..."
+$DesktopPath = [Environment]::GetFolderPath("Desktop")
+$LauncherPath = Join-Path $DesktopPath "claude-meter.bat"
+$LauncherContent = @"
+@echo off
+"$ClaudeMeterPath" start
+cmd /k
+"@
+Set-Content -Path $LauncherPath -Value $LauncherContent -Encoding ascii
+Write-Host "==> Created launcher: $LauncherPath"
+
+Write-Host "==> Done. Launch the dashboard by double-clicking the launcher or running: claude-meter start"

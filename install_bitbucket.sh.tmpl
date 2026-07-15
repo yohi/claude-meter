@@ -1,0 +1,211 @@
+#!/bin/sh
+# claude-meter one-line installer for a private Bitbucket repository
+# (Linux / macOS, POSIX sh).
+#
+# The claude-meter package is distributed from a PRIVATE Bitbucket repository,
+# so this installer requires a Bitbucket App password with the
+# "Repositories: Read" scope.
+#
+# Intended usage (pass the credentials through environment variables so they do
+# NOT remain in your shell history or on screen, and feed them to curl via a
+# config file on stdin -- rather than `curl -u user:pass`, whose expanded
+# credentials would appear as a plain curl command-line argument visible to
+# other users on this host for the duration of the request, e.g. via `ps aux`
+# or `/proc/{pid}/cmdline`):
+#     export BITBUCKET_USER=<your-bitbucket-username>
+#     export BITBUCKET_APP_PASSWORD=<your-app-password>
+#     printf 'user = "%s:%s"\n' "$BITBUCKET_USER" "$BITBUCKET_APP_PASSWORD" | curl -fsSL -K - \
+#       https://bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/<BITBUCKET_REPOSITORY_NAME>/raw/master/install.sh | sh
+#
+# This downloads and runs a remote script directly in your shell. For safety,
+# review the contents of this script before piping it into `sh`.
+#
+# What it does:
+#   1. Installs the `claude-meter` command from the private Bitbucket repository
+#      (uv, then pip3, then python3 -m pip as fallbacks), pinned to the latest
+#      tag resolved via the Bitbucket API (see resolve_ref() below).
+#   2. Verifies the command is on your PATH.
+#   3. Runs `claude-meter init`.
+#   4. Creates a double-clickable desktop launcher that runs `claude-meter start`
+#      (no local repository clone required).
+#
+# Note: this script itself is fetched from the `master` branch above, so the
+# bootstrap fetch is not integrity-pinned; only the *installed* claude-meter
+# package version is pinned to a tag by resolve_ref(), which aborts rather
+# than silently falling back to an unreviewed default-branch HEAD if that
+# resolution fails. To pin the bootstrap fetch too, download this script from
+# a specific tag/commit URL instead.
+
+set -eu
+
+BITBUCKET_WORKSPACE_NAME="<BITBUCKET_WORKSPACE_NAME>"
+BITBUCKET_REPOSITORY_NAME="<BITBUCKET_REPOSITORY_NAME>"
+UV_INSTALL_DOCS="https://docs.astral.sh/uv/getting-started/installation/"
+
+# Print a progress message to stdout.
+info() {
+	printf '==> %s\n' "$1"
+}
+
+# Print an error message to stderr.
+err() {
+	printf 'Error: %s\n' "$1" >&2
+}
+
+# Abort early unless the Bitbucket credentials are provided via the environment.
+# The POSIX "${var:?message}" expansion prints the message and exits when unset,
+# so credentials are never taken from a prompt or a file.
+require_credentials() {
+	: "${BITBUCKET_USER:?Set BITBUCKET_USER before running this script.}"
+	: "${BITBUCKET_APP_PASSWORD:?Set BITBUCKET_APP_PASSWORD before running this script.}"
+}
+
+# Resolve the git tag to install. Defaults to the latest tag on the private
+# Bitbucket repository (queried via the Bitbucket API using the same
+# credentials required above) so this installer is pinned to a specific,
+# reviewed release instead of an unpinned default-branch HEAD. Set
+# CLAUDE_METER_REF to override (e.g. to a specific tag or commit SHA).
+resolve_ref() {
+	if [ -n "${CLAUDE_METER_REF:-}" ]; then
+		printf '%s' "$CLAUDE_METER_REF"
+		return
+	fi
+	if command -v curl >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+		tag="$(printf 'user = "%s:%s"\n' "$BITBUCKET_USER" "$BITBUCKET_APP_PASSWORD" \
+			| curl -fsSL -K - "https://api.bitbucket.org/2.0/repositories/${BITBUCKET_WORKSPACE_NAME}/${BITBUCKET_REPOSITORY_NAME}/refs/tags?sort=-target.date&pagelen=1" 2>/dev/null \
+			| python3 -c "import json, sys
+values = json.load(sys.stdin).get('values') or []
+print(values[0]['name'] if values else '')" 2>/dev/null || true)"
+		if [ -n "$tag" ]; then
+			printf '%s' "$tag"
+			return
+		fi
+	fi
+	err "Could not determine the latest tag from the Bitbucket API (workspace=${BITBUCKET_WORKSPACE_NAME}, repo=${BITBUCKET_REPOSITORY_NAME})."
+	err "Refusing to install an unpinned default-branch HEAD. Set CLAUDE_METER_REF to a"
+	err "specific tag or commit SHA, then re-run this script."
+	exit 1
+}
+
+# Install the claude-meter package using the first available installer.
+# Separated into its own function so tests can source this script (with
+# CLAUDE_METER_INSTALL_LIB=1) and exercise the launcher logic without running
+# a real package installation.
+install_package() {
+	# Provide the Bitbucket App password via a GIT_ASKPASS helper instead of
+	# embedding it in the repo URL. Credentials passed as CLI arguments (e.g.
+	# inside a URL) are visible to other users on this host for the duration
+	# of the process via `ps aux` / `/proc/{pid}/cmdline`; GIT_ASKPASS avoids
+	# that exposure entirely, and nothing is written to disk beyond a
+	# short-lived temp script that only references the env var name (the
+	# password value itself is never persisted). This mirrors the pattern
+	# already used for git auth in .github/workflows/release-please.yml.
+	askpass_script="$(mktemp)"
+	trap 'rm -f "$askpass_script"' EXIT
+	printf '#!/bin/sh\necho "$BITBUCKET_APP_PASSWORD"\n' >"$askpass_script"
+	chmod +x "$askpass_script"
+	export GIT_ASKPASS="$askpass_script"
+	ref="$(resolve_ref)"
+	repo_url="git+https://${BITBUCKET_USER}@bitbucket.org/${BITBUCKET_WORKSPACE_NAME}/${BITBUCKET_REPOSITORY_NAME}.git@${ref}"
+	if command -v uv >/dev/null 2>&1; then
+		info "Installing claude-meter with uv (uv tool install)..."
+		uv tool install "$repo_url"
+	elif command -v pip3 >/dev/null 2>&1; then
+		info "uv not found; installing claude-meter with pip3 (--user)..."
+		pip3 install --user "$repo_url"
+	elif command -v python3 >/dev/null 2>&1; then
+		info "uv/pip3 not found; installing claude-meter with python3 -m pip (--user)..."
+		python3 -m pip install --user "$repo_url"
+	else
+		err "No suitable installer found: none of uv, pip3, or python3 is available."
+		err "Install uv first, then re-run this script: $UV_INSTALL_DOCS"
+		exit 1
+	fi
+}
+
+# Ensure the claude-meter command is reachable on PATH after installation.
+ensure_on_path() {
+	# `curl | sh` runs this installer in a subshell that never sources
+	# ~/.bashrc or ~/.zshrc, so a PATH update written there by uv/pip only
+	# takes effect in a *new* shell. Resolve the *actual* per-user scripts
+	# directory for the Python that performed the install -- this varies by
+	# platform/interpreter (e.g. ~/Library/Python/X.Y/bin on macOS framework
+	# Python vs. ~/.local/bin on most Linux distros) -- and prepend it, along
+	# with the common ~/.local/bin fallback, so this run can find
+	# `claude-meter` without requiring the user to open a new shell and
+	# re-run the script.
+	user_scripts_dir=""
+	if command -v python3 >/dev/null 2>&1; then
+		user_scripts_dir="$(python3 -c "import sysconfig; print(sysconfig.get_path('scripts', 'posix_user'))" 2>/dev/null || true)"
+	fi
+	if [ -n "$user_scripts_dir" ]; then
+		export PATH="$user_scripts_dir:$HOME/.local/bin:$PATH"
+	else
+		export PATH="$HOME/.local/bin:$PATH"
+	fi
+	if ! command -v claude-meter >/dev/null 2>&1; then
+		err "claude-meter was installed but is not on your PATH."
+		err "Open a new shell and re-run this script, or add the install location (e.g. ~/.local/bin) to your PATH."
+		exit 1
+	fi
+}
+
+# Run first-time initialization.
+run_init() {
+	info "Initializing claude-meter (claude-meter init)..."
+	claude-meter init
+}
+
+# Create an OS-appropriate desktop launcher that simply calls `claude-meter
+# start`. This deliberately does NOT depend on a local repository clone: there
+# is no `cd` into a repo directory and no reference to repo-local files.
+create_launcher() {
+	os="$(uname -s)"
+	# Embed the *resolved* absolute path rather than a bare `claude-meter`
+	# command name: double-clicking a desktop/GUI launcher does not always
+	# inherit this session's PATH (see ensure_on_path above), so relying on
+	# PATH lookup again here would silently fail in exactly the case this
+	# launcher exists to solve.
+	claude_meter_path="$(command -v claude-meter)"
+	if [ "$os" = "Darwin" ]; then
+		launcher="$HOME/Desktop/claude-meter.command"
+		info "Creating macOS launcher: $launcher"
+		mkdir -p "$HOME/Desktop"
+		cat >"$launcher" <<LAUNCHER
+#!/bin/bash
+"$claude_meter_path" start
+LAUNCHER
+		chmod +x "$launcher"
+	else
+		launcher_dir="$HOME/.local/share/applications"
+		launcher="$launcher_dir/claude-meter.desktop"
+		info "Creating Linux desktop launcher: $launcher"
+		mkdir -p "$launcher_dir"
+		cat >"$launcher" <<LAUNCHER
+[Desktop Entry]
+Type=Application
+Name=claude-meter
+Comment=Local ClaudeCode usage and cost dashboard
+Exec=bash -c '"$claude_meter_path" start; exec "\$SHELL"'
+Icon=utilities-terminal
+Terminal=true
+Categories=Utility;Development;
+LAUNCHER
+	fi
+}
+
+main() {
+	info "Starting claude-meter installation..."
+	require_credentials
+	install_package
+	ensure_on_path
+	run_init
+	create_launcher
+	info "Done. Launch the dashboard any time with: claude-meter start"
+}
+
+# Only run main when executed directly. Sourcing with CLAUDE_METER_INSTALL_LIB=1
+# exposes the functions above for testing without triggering installation.
+if [ "${CLAUDE_METER_INSTALL_LIB:-}" != "1" ]; then
+	main "$@"
+fi
