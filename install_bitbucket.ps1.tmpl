@@ -26,6 +26,12 @@
     This command downloads and runs a remote script directly in your shell. For
     safety, review the contents of this script before piping it into your shell.
 
+    Note: this script itself is fetched from the `master` branch above, so the
+    bootstrap fetch is not integrity-pinned; only the *installed* claude-meter
+    package version is pinned to a tag by Resolve-Ref() below (queried from the
+    Bitbucket API), which throws rather than silently falling back to an
+    unpinned default-branch HEAD if that resolution fails.
+
 .EXAMPLE
     $env:BITBUCKET_USER = "<your-bitbucket-username>"
     $env:BITBUCKET_APP_PASSWORD = "<your-app-password>"
@@ -43,6 +49,29 @@ $UvInstallDocs = "https://docs.astral.sh/uv/getting-started/installation/"
 function Test-CommandExists {
     param([Parameter(Mandatory = $true)][string]$Name)
     return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+# Resolve the git tag to install. Defaults to the latest tag on the private
+# Bitbucket repository (queried via the Bitbucket API using the same
+# credentials required below) so this installer is pinned to a specific,
+# reviewed release instead of an unpinned default-branch HEAD. Set
+# $env:CLAUDE_METER_REF to override (e.g. to a specific tag or commit SHA).
+function Resolve-Ref {
+    if ($env:CLAUDE_METER_REF) {
+        return $env:CLAUDE_METER_REF
+    }
+    try {
+        $AuthHeader = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($env:BITBUCKET_USER):$($env:BITBUCKET_APP_PASSWORD)"))
+        $TagsUrl = "https://api.bitbucket.org/2.0/repositories/$BitbucketWorkspaceName/$BitbucketRepositoryName/refs/tags?sort=-target.date&pagelen=1"
+        $Response = Invoke-RestMethod -Uri $TagsUrl -Headers @{ Authorization = $AuthHeader }
+        if ($Response.values -and $Response.values.Count -gt 0) {
+            return $Response.values[0].name
+        }
+    }
+    catch {
+        # Fall through to the throw below.
+    }
+    throw "Could not determine the latest tag from the Bitbucket API (workspace=$BitbucketWorkspaceName, repo=$BitbucketRepositoryName). Refusing to install an unpinned default-branch HEAD. Set `$env:CLAUDE_METER_REF to a specific tag or commit SHA, then re-run this script."
 }
 
 Write-Host "==> Starting claude-meter installation..."
@@ -67,15 +96,16 @@ $AskPassPath = Join-Path ([System.IO.Path]::GetTempPath()) "claude-meter-askpass
 Set-Content -Path $AskPassPath -Value "@echo %BITBUCKET_APP_PASSWORD%" -Encoding ascii
 try {
     $env:GIT_ASKPASS = $AskPassPath
-    $RepoUrl = "git+https://$($env:BITBUCKET_USER)@bitbucket.org/$BitbucketWorkspaceName/$BitbucketRepositoryName.git"
+    $Ref = Resolve-Ref
+    $RepoUrl = "git+https://$($env:BITBUCKET_USER)@bitbucket.org/$BitbucketWorkspaceName/$BitbucketRepositoryName.git@$Ref"
 
     # 1. Install the package with the first available installer.
     if (Test-CommandExists -Name "uv") {
-        Write-Host "==> Installing claude-meter with uv (uv tool install)..."
+        Write-Host "==> Installing claude-meter $Ref with uv (uv tool install)..."
         uv tool install $RepoUrl
     }
     elseif (Test-CommandExists -Name "python") {
-        Write-Host "==> uv not found; installing claude-meter with python -m pip (--user)..."
+        Write-Host "==> uv not found; installing claude-meter $Ref with python -m pip (--user)..."
         python -m pip install --user $RepoUrl
 
         # `python -m pip install --user` places console scripts in the
@@ -95,12 +125,18 @@ try {
 }
 finally {
     Remove-Item -Path $AskPassPath -Force -ErrorAction SilentlyContinue
+    Remove-Item Env:GIT_ASKPASS -ErrorAction SilentlyContinue
 }
 
-# 2. Verify the command is reachable on PATH.
-if (-not (Test-CommandExists -Name "claude-meter")) {
+# 2. Verify the command is reachable on PATH and resolve its absolute path.
+# Desktop/GUI launches (double-clicking claude-meter.bat below) do not always
+# inherit this session's PATH, so the launcher embeds this resolved path
+# directly rather than relying on a bare `claude-meter` command lookup.
+$ClaudeMeterCommand = Get-Command -Name "claude-meter" -ErrorAction SilentlyContinue
+if (-not $ClaudeMeterCommand) {
     throw "claude-meter was installed but is not on your PATH. Open a new terminal and re-run this script, or add the install location to your PATH."
 }
+$ClaudeMeterPath = $ClaudeMeterCommand.Source
 
 # 3. Run first-time initialization.
 Write-Host "==> Initializing claude-meter (claude-meter init)..."
@@ -112,7 +148,8 @@ $DesktopPath = [Environment]::GetFolderPath("Desktop")
 $LauncherPath = Join-Path $DesktopPath "claude-meter.bat"
 $LauncherContent = @"
 @echo off
-cmd /k claude-meter start
+"$ClaudeMeterPath" start
+cmd /k
 "@
 Set-Content -Path $LauncherPath -Value $LauncherContent -Encoding ascii
 Write-Host "==> Created launcher: $LauncherPath"

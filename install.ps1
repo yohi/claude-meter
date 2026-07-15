@@ -11,6 +11,12 @@
     This command downloads and runs a remote script directly in your shell. For
     safety, review the contents of this script before piping it into your shell.
 
+    Note: this script itself is fetched from the `master` branch below, so the
+    bootstrap fetch is not integrity-pinned; only the *installed* claude-meter
+    package version is pinned to a release tag by Resolve-Ref(), which throws
+    rather than silently falling back to an unreviewed `master` HEAD if that
+    resolution fails.
+
 .EXAMPLE
     irm https://raw.githubusercontent.com/yohi/claude-meter/master/install.ps1 | iex
 
@@ -56,10 +62,9 @@ function Resolve-Ref {
         }
     }
     catch {
-        # Fall through to the warning/fallback below.
+        # Fall through to the throw below.
     }
-    Write-Warning "Could not determine the latest release tag; falling back to the master branch (unreviewed HEAD)."
-    return "master"
+    throw "Could not determine the latest release tag from $GitHubReleasesLatestUrl. Refusing to install an unreviewed master HEAD. Set `$env:CLAUDE_METER_REF to a specific tag, a commit SHA, or `"master`" to opt in explicitly, then re-run this script."
 }
 
 Write-Host "==> Starting claude-meter installation..."
@@ -90,10 +95,15 @@ else {
     throw "No suitable installer found: neither uv nor python is available. Install uv first, then re-run this script: $UvInstallDocs"
 }
 
-# 2. Verify the command is reachable on PATH.
-if (-not (Test-CommandExists -Name "claude-meter")) {
+# 2. Verify the command is reachable on PATH and resolve its absolute path.
+# Desktop/GUI launches (double-clicking claude-meter.bat below) do not always
+# inherit this session's PATH, so the launcher embeds this resolved path
+# directly rather than relying on a bare `claude-meter` command lookup.
+$ClaudeMeterCommand = Get-Command -Name "claude-meter" -ErrorAction SilentlyContinue
+if (-not $ClaudeMeterCommand) {
     throw "claude-meter was installed but is not on your PATH. Open a new terminal and re-run this script, or add the install location to your PATH."
 }
+$ClaudeMeterPath = $ClaudeMeterCommand.Source
 
 # 3. Run first-time initialization.
 Write-Host "==> Initializing claude-meter (claude-meter init)..."
@@ -105,7 +115,8 @@ $DesktopPath = [Environment]::GetFolderPath("Desktop")
 $LauncherPath = Join-Path $DesktopPath "claude-meter.bat"
 $LauncherContent = @"
 @echo off
-cmd /k claude-meter start
+"$ClaudeMeterPath" start
+cmd /k
 "@
 Set-Content -Path $LauncherPath -Value $LauncherContent -Encoding ascii
 Write-Host "==> Created launcher: $LauncherPath"
