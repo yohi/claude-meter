@@ -30,7 +30,7 @@
 .EXAMPLE
     $tmp = Join-Path ([System.IO.Path]::GetTempPath()) "claude-meter-install-$([Guid]::NewGuid()).ps1"
     try {
-        Invoke-WebRequest -Uri "https://raw.githubusercontent.com/yohi/claude-meter/master/install.ps1" -OutFile $tmp
+        Invoke-WebRequest -Uri "https://raw.githubusercontent.com/yohi/claude-meter/master/install.ps1" -OutFile $tmp -ErrorAction Stop
         Get-Content -Raw -Path $tmp | Invoke-Expression
     } finally {
         Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue

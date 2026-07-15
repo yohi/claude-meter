@@ -48,7 +48,7 @@
     $tmp = Join-Path ([System.IO.Path]::GetTempPath()) "claude-meter-install-$([Guid]::NewGuid()).ps1"
     try {
         $Headers = @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$env:BITBUCKET_USER`:$env:BITBUCKET_APP_PASSWORD")) }
-        Invoke-WebRequest -Headers $Headers -Uri "https://bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/<BITBUCKET_REPOSITORY_NAME>/raw/master/install.ps1" -OutFile $tmp
+        Invoke-WebRequest -Headers $Headers -Uri "https://bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/<BITBUCKET_REPOSITORY_NAME>/raw/master/install.ps1" -OutFile $tmp -ErrorAction Stop
         Get-Content -Raw -Path $tmp | Invoke-Expression
     } finally {
         Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue
