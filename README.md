@@ -157,6 +157,21 @@ When a token component is non-zero but the corresponding price is unknown,
 Unknown models result in `cost_usd = NULL` and are displayed as "Unknown model"
 in the UI.
 
+### Estimation accuracy
+
+Cost is estimated from each `assistant` record's `usage` block (Claude Code's
+per-call report from Bedrock). Output and cache tokens track AWS actuals
+closely, but under **global cross-region inference** with heavy prompt
+caching the estimate can fall a few percent **below** the AWS actual.
+
+The cause is a billing-side classification difference: AWS may bill a small
+fraction of `cache_read` tokens as fresh `input` (cross-region cache misses
+or 5-minute cache TTL expiry) that the transcript still records as
+`cache_read`. Since `input` costs ~10x `cache_read`, this raises the AWS-side
+cost. In one observed Sonnet dataset the gap was ~5.6%. It is inherent to
+transcript-only estimation and cannot be corrected without AWS Cost Explorer
+data (a non-goal).
+
 ## Pricing sources
 
 1. **`models.dev` API** (`https://models.dev/api.json`) — primary source,

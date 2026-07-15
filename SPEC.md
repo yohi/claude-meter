@@ -258,6 +258,27 @@ total_cost  = input_cost + output_cost + cache_cost
 When a token component has non-zero tokens but the corresponding price is
 `None`, `cost_usd` is set to `NULL` (rather than 0) to avoid underestimation.
 
+### Estimation accuracy and known limitations
+
+Cost is estimated from each `assistant` record's `usage` block, which is
+Claude Code's per-call usage report from Bedrock. For output and cache tokens
+the estimate tracks AWS actuals closely; the dominant residual error is an
+`input` vs `cache` classification difference on the AWS billing side.
+
+Under **global cross-region inference** (or when the 5-minute prompt-cache TTL
+expires), AWS may bill a small fraction of tokens as fresh `input` that the
+transcript's `usage` block still reports as `cache_read`. The total token
+volume matches (observed within ~0.3%), but because `input` is priced ~10x
+`cache_read`, the reclassified tokens raise the AWS-side cost. In one observed
+Sonnet 4.6 dataset the estimate was ~5.6% below the AWS actual, and
+reclassifying ~2% of `cache_read` as `input` fully closed the gap.
+
+This error is inherent to transcript-only estimation: the reclassification
+happens server-side after the response is logged and leaves no signal in
+the JSONL (`inference_geo` is empty), so it cannot be corrected without AWS
+Cost Explorer / CUR data (a non-goal). Estimates should be read as a close
+lower bound on actual Bedrock cost, not an exact match.
+
 ### Model name normalization
 
 ClaudeCode internal names (e.g. `claude-haiku-4-5-20251001`) and Bedrock
