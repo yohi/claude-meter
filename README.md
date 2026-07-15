@@ -11,6 +11,24 @@ background log watching):
 uv run claude-meter start   # or: uv run cm start
 ```
 
+One-line install (no local clone needed) — install directly from GitHub without
+cloning the repository. This installs the `claude-meter` command with `uv tool
+install` (falling back to `pip`), runs `claude-meter init`, and creates a
+desktop launcher automatically:
+
+<!-- markdownlint-disable MD013 -->
+```bash
+curl -fsSL https://raw.githubusercontent.com/yohi/claude-meter/master/install.sh | sh
+```
+
+```powershell
+irm https://raw.githubusercontent.com/yohi/claude-meter/master/install.ps1 | iex
+```
+<!-- markdownlint-enable MD013 -->
+
+Because these commands pipe a remote script straight into your shell, review
+the script contents before running.
+
 With `uvx` (running directly from the built package or repository on Bitbucket):
 
 <!-- markdownlint-disable MD013 -->
