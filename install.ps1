@@ -19,7 +19,11 @@
 
 $ErrorActionPreference = "Stop"
 
-$RepoUrl = "git+https://github.com/yohi/claude-meter.git"
+# Base git+https URL (without a ref). A specific ref (a release tag, by
+# default) is appended by Resolve-Ref() below so that a plain `irm | iex`
+# never installs an unreviewed `master` HEAD.
+$RepoBaseUrl = "git+https://github.com/yohi/claude-meter.git"
+$GitHubReleasesLatestUrl = "https://github.com/yohi/claude-meter/releases/latest"
 $UvInstallDocs = "https://docs.astral.sh/uv/getting-started/installation/"
 
 function Test-CommandExists {
@@ -27,15 +31,49 @@ function Test-CommandExists {
     return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
 }
 
+# Resolve the git ref to install. Defaults to the latest published release
+# tag (resolved via GitHub's /releases/latest redirect) so this installer is
+# pinned to a reviewed, stable release instead of the master branch's
+# unreviewed HEAD. Set $env:CLAUDE_METER_REF to override (e.g. to a specific
+# tag, a commit SHA, or "master" to opt back into HEAD).
+function Resolve-Ref {
+    if ($env:CLAUDE_METER_REF) {
+        return $env:CLAUDE_METER_REF
+    }
+    try {
+        $handler = [System.Net.Http.HttpClientHandler]::new()
+        $handler.AllowAutoRedirect = $false
+        $client = [System.Net.Http.HttpClient]::new($handler)
+        try {
+            $response = $client.GetAsync($GitHubReleasesLatestUrl).GetAwaiter().GetResult()
+            $location = $response.Headers.Location
+            if ($location -and ($location.ToString() -match '/tag/([^/]+)$')) {
+                return $Matches[1]
+            }
+        }
+        finally {
+            $client.Dispose()
+        }
+    }
+    catch {
+        # Fall through to the warning/fallback below.
+    }
+    Write-Warning "Could not determine the latest release tag; falling back to the master branch (unreviewed HEAD)."
+    return "master"
+}
+
 Write-Host "==> Starting claude-meter installation..."
+
+$Ref = Resolve-Ref
+$RepoUrl = "$RepoBaseUrl@$Ref"
 
 # 1. Install the package with the first available installer.
 if (Test-CommandExists -Name "uv") {
-    Write-Host "==> Installing claude-meter with uv (uv tool install)..."
+    Write-Host "==> Installing claude-meter $Ref with uv (uv tool install)..."
     uv tool install $RepoUrl
 }
 elseif (Test-CommandExists -Name "python") {
-    Write-Host "==> uv not found; installing claude-meter with python -m pip (--user)..."
+    Write-Host "==> uv not found; installing claude-meter $Ref with python -m pip (--user)..."
     python -m pip install --user $RepoUrl
 }
 else {
