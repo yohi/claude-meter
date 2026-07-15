@@ -78,6 +78,17 @@ jobs:
           : "${BITBUCKET_REPOSITORY_NAME:?BITBUCKET_REPOSITORY_NAME is required}"
           PACKAGE_NAME="${{ github.event.repository.name }}"
 
+          # sed replacement text can contain "\", "&", or the delimiter
+          # character; escape them here so workspace/repo names or the
+          # release tag can never corrupt the substitution below or trigger
+          # an unintended back-reference via a bare "&".
+          escape_sed_repl() {
+            printf '%s' "$1" | sed -e 's/[\\&|]/\\&/g'
+          }
+          ESCAPED_WORKSPACE="$(escape_sed_repl "$BITBUCKET_WORKSPACE_NAME")"
+          ESCAPED_REPO="$(escape_sed_repl "$BITBUCKET_REPOSITORY_NAME")"
+          ESCAPED_VERSION="$(escape_sed_repl "${RELEASE_TAG#v}")"
+
           # 古いソースコードやファイルを削除 (packages と .git 以外)
           find bitbucket-repo -mindepth 1 -maxdepth 1 -not -name ".git" -not -name "packages" -exec rm -rf {} +
 
@@ -90,9 +101,9 @@ jobs:
 
           # Bitbucket用にREADME_BITBUCKET.mdをREADME.mdとしてコピーし、プレースホルダーを置換
           if [ -e README_BITBUCKET.md ]; then
-            sed -e "s/<BITBUCKET_WORKSPACE_NAME>/${BITBUCKET_WORKSPACE_NAME}/g" \
-                -e "s/<BITBUCKET_REPOSITORY_NAME>/${BITBUCKET_REPOSITORY_NAME}/g" \
-                -e "s/<VERSION>/${RELEASE_TAG#v}/g" \
+            sed -e "s|<BITBUCKET_WORKSPACE_NAME>|${ESCAPED_WORKSPACE}|g" \
+                -e "s|<BITBUCKET_REPOSITORY_NAME>|${ESCAPED_REPO}|g" \
+                -e "s|<VERSION>|${ESCAPED_VERSION}|g" \
                 README_BITBUCKET.md > bitbucket-repo/README.md
           elif [ -e README.md ]; then
             cp README.md bitbucket-repo/
@@ -100,14 +111,14 @@ jobs:
 
           # install_bitbucket.sh.tmpl / install_bitbucket.ps1.tmpl のプレースホルダーを実値に置換してコピー
           if [ -e install_bitbucket.sh.tmpl ]; then
-            sed -e "s/<BITBUCKET_WORKSPACE_NAME>/${BITBUCKET_WORKSPACE_NAME}/g" \
-                -e "s/<BITBUCKET_REPOSITORY_NAME>/${BITBUCKET_REPOSITORY_NAME}/g" \
+            sed -e "s|<BITBUCKET_WORKSPACE_NAME>|${ESCAPED_WORKSPACE}|g" \
+                -e "s|<BITBUCKET_REPOSITORY_NAME>|${ESCAPED_REPO}|g" \
                 install_bitbucket.sh.tmpl > bitbucket-repo/install.sh
             chmod +x bitbucket-repo/install.sh
           fi
           if [ -e install_bitbucket.ps1.tmpl ]; then
-            sed -e "s/<BITBUCKET_WORKSPACE_NAME>/${BITBUCKET_WORKSPACE_NAME}/g" \
-                -e "s/<BITBUCKET_REPOSITORY_NAME>/${BITBUCKET_REPOSITORY_NAME}/g" \
+            sed -e "s|<BITBUCKET_WORKSPACE_NAME>|${ESCAPED_WORKSPACE}|g" \
+                -e "s|<BITBUCKET_REPOSITORY_NAME>|${ESCAPED_REPO}|g" \
                 install_bitbucket.ps1.tmpl > bitbucket-repo/install.ps1
           fi
 
