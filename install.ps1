@@ -75,6 +75,16 @@ if (Test-CommandExists -Name "uv") {
 elseif (Test-CommandExists -Name "python") {
     Write-Host "==> uv not found; installing claude-meter $Ref with python -m pip (--user)..."
     python -m pip install --user $RepoUrl
+
+    # `python -m pip install --user` places console scripts in the per-user
+    # Scripts directory (e.g. %APPDATA%\Python\PythonXY\Scripts), which is
+    # not part of the current PowerShell session's PATH even when a Python
+    # installer has added it to the persistent user PATH. Prepend it now so
+    # this run can find `claude-meter` without requiring a new shell.
+    $UserScriptsDir = (python -c "import sysconfig; print(sysconfig.get_path('scripts', 'nt_user'))" 2>$null)
+    if ($UserScriptsDir -and (Test-Path $UserScriptsDir)) {
+        $env:PATH = "$UserScriptsDir;$env:PATH"
+    }
 }
 else {
     throw "No suitable installer found: neither uv nor python is available. Install uv first, then re-run this script: $UvInstallDocs"
