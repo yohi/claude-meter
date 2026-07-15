@@ -2,9 +2,9 @@
 # claude-meter one-line installer (Linux / macOS, POSIX sh).
 #
 # Intended usage:
-#     tmp="$(mktemp)" && curl -fsSL -o "$tmp" \
+#     (tmp="$(mktemp)" && curl -fsSL -o "$tmp" \
 #       https://raw.githubusercontent.com/yohi/claude-meter/master/install.sh \
-#       && sh "$tmp"; rm -f "$tmp"
+#       && sh "$tmp"; status=$?; rm -f "$tmp"; exit $status)
 #
 # Downloading to a temp file first (rather than piping curl directly into
 # `sh`) means `sh` only runs after `curl` has exited successfully, so a

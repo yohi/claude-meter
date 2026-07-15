@@ -18,14 +18,14 @@ desktop launcher automatically:
 
 <!-- markdownlint-disable MD013 -->
 ```bash
-tmp="$(mktemp)" && curl -fsSL -o "$tmp" https://raw.githubusercontent.com/yohi/claude-meter/master/install.sh \
-  && sh "$tmp"; rm -f "$tmp"
+(tmp="$(mktemp)" && curl -fsSL -o "$tmp" https://raw.githubusercontent.com/yohi/claude-meter/master/install.sh \
+  && sh "$tmp"; status=$?; rm -f "$tmp"; exit $status)
 ```
 
 ```powershell
 $tmp = Join-Path ([System.IO.Path]::GetTempPath()) "claude-meter-install-$([Guid]::NewGuid()).ps1"
 try {
-    Invoke-WebRequest -Uri "https://raw.githubusercontent.com/yohi/claude-meter/master/install.ps1" -OutFile $tmp
+    Invoke-WebRequest -Uri "https://raw.githubusercontent.com/yohi/claude-meter/master/install.ps1" -OutFile $tmp -ErrorAction Stop
     Get-Content -Raw -Path $tmp | Invoke-Expression
 } finally {
     Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue
@@ -37,9 +37,16 @@ These commands download the installer to a temp file, then run its
 content, then remove the temp file, rather than piping the remote script
 straight into your shell — that way the installer only runs after the
 download has completed successfully, so a connection drop mid-transfer can
-never execute a truncated script. The PowerShell example pipes the
-downloaded content into `Invoke-Expression` instead of executing the temp
-file directly: files downloaded via `Invoke-WebRequest` are marked as
+never execute a truncated script. This guarantee for the PowerShell example
+depends on `-ErrorAction Stop` on `Invoke-WebRequest`: a fresh PowerShell
+session's default `$ErrorActionPreference` is `Continue`, so without it a
+failed request would not stop the script, and `Get-Content` could then read
+a partial or missing file. If you copy just the `.EXAMPLE` snippet and run
+it standalone, keep `-ErrorAction Stop` (or set
+`$ErrorActionPreference = "Stop"` first) for the same guarantee. The
+PowerShell example pipes the downloaded content into `Invoke-Expression`
+instead of executing the temp file directly: files downloaded via
+`Invoke-WebRequest` are marked as
 being from the internet (Zone.Identifier / Mark of the Web), and the
 `RemoteSigned` execution policy (a common default, e.g. on Windows Server)
 would otherwise block running an unsigned `.ps1` file directly.
