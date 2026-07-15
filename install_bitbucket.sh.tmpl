@@ -14,11 +14,17 @@
 # or `/proc/{pid}/cmdline`):
 #     export BITBUCKET_USER=<your-bitbucket-username>
 #     export BITBUCKET_APP_PASSWORD=<your-app-password>
-#     printf 'user = "%s:%s"\n' "$BITBUCKET_USER" "$BITBUCKET_APP_PASSWORD" | curl -fsSL -K - \
-#       https://bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/<BITBUCKET_REPOSITORY_NAME>/raw/master/install.sh | sh
+#     (tmp="$(mktemp)" && printf 'user = "%s:%s"\n' "$BITBUCKET_USER" "$BITBUCKET_APP_PASSWORD" \
+#       | curl -fsSL -K - -o "$tmp" \
+#       https://bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/<BITBUCKET_REPOSITORY_NAME>/raw/master/install.sh \
+#       && sh "$tmp"; status=$?; rm -f "$tmp"; exit $status)
 #
-# This downloads and runs a remote script directly in your shell. For safety,
-# review the contents of this script before piping it into `sh`.
+# Downloading to a temp file first (rather than piping curl directly into
+# `sh`) means `sh` only runs after `curl` has exited successfully, so a
+# connection drop mid-transfer can never execute a truncated script; the
+# temp file is removed afterwards regardless of the outcome. For safety,
+# review the downloaded script's contents (the temp file above) before it
+# runs.
 #
 # What it does:
 #   1. Installs the `claude-meter` command from the private Bitbucket repository
@@ -125,8 +131,9 @@ install_package() {
 
 # Ensure the claude-meter command is reachable on PATH after installation.
 ensure_on_path() {
-	# `curl | sh` runs this installer in a subshell that never sources
-	# ~/.bashrc or ~/.zshrc, so a PATH update written there by uv/pip only
+	# Running this installer with `sh` (whether piped or from a downloaded
+	# temp file) executes it in a subshell that never sources ~/.bashrc or
+	# ~/.zshrc, so a PATH update written there by uv/pip only
 	# takes effect in a *new* shell. Resolve the *actual* per-user scripts
 	# directory for the Python that performed the install -- this varies by
 	# platform/interpreter (e.g. ~/Library/Python/X.Y/bin on macOS framework

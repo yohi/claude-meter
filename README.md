@@ -18,16 +18,41 @@ desktop launcher automatically:
 
 <!-- markdownlint-disable MD013 -->
 ```bash
-curl -fsSL https://raw.githubusercontent.com/yohi/claude-meter/master/install.sh | sh
+(tmp="$(mktemp)" && curl -fsSL -o "$tmp" https://raw.githubusercontent.com/yohi/claude-meter/master/install.sh \
+  && sh "$tmp"; status=$?; rm -f "$tmp"; exit $status)
 ```
 
 ```powershell
-irm https://raw.githubusercontent.com/yohi/claude-meter/master/install.ps1 | iex
+$tmp = Join-Path ([System.IO.Path]::GetTempPath()) "claude-meter-install-$([Guid]::NewGuid()).ps1"
+try {
+    Invoke-WebRequest -Uri "https://raw.githubusercontent.com/yohi/claude-meter/master/install.ps1" -OutFile $tmp -ErrorAction Stop
+    Get-Content -Raw -Path $tmp | Invoke-Expression
+} finally {
+    Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue
+}
 ```
 <!-- markdownlint-enable MD013 -->
 
-Because these commands pipe a remote script straight into your shell, review
-the script contents before running.
+These commands download the installer to a temp file, then run its
+content, then remove the temp file, rather than piping the remote script
+straight into your shell — that way the installer only runs after the
+download has completed successfully, so a connection drop mid-transfer can
+never execute a truncated script. This guarantee for the PowerShell example
+depends on `-ErrorAction Stop` on `Invoke-WebRequest`: a fresh PowerShell
+session's default `$ErrorActionPreference` is `Continue`, so without it a
+failed request would not stop the script, and `Get-Content` could then read
+a partial or missing file. If you copy just the `.EXAMPLE` snippet and run
+it standalone, keep `-ErrorAction Stop` (or set
+`$ErrorActionPreference = "Stop"` first) for the same guarantee. The
+PowerShell example pipes the downloaded content into `Invoke-Expression`
+instead of executing the temp file directly: files downloaded via
+`Invoke-WebRequest` are marked as
+being from the internet (Zone.Identifier / Mark of the Web), and the
+`RemoteSigned` execution policy (a common default, e.g. on Windows Server)
+would otherwise block running an unsigned `.ps1` file directly.
+`Invoke-Expression` evaluates content as a string rather than running a
+script file, so it isn't subject to that restriction. For safety, review
+the downloaded script's contents before it runs.
 
 Note: this fetches `install.sh`/`install.ps1` from the `master` branch, so the
 bootstrap fetch itself is not pinned to an immutable release; only the

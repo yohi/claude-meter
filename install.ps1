@@ -8,8 +8,18 @@
     desktop launcher (claude-meter.bat) that runs `claude-meter start`. No local
     repository clone is required.
 
-    This command downloads and runs a remote script directly in your shell. For
-    safety, review the contents of this script before piping it into your shell.
+    Downloading to a temp file first (rather than piping `irm` directly into
+    `iex`) means the download must complete fully before anything runs, so a
+    connection drop mid-transfer can never execute a truncated script. The
+    downloaded content is then piped into `Invoke-Expression` rather than
+    executed as a script file directly: `Invoke-WebRequest` marks downloaded
+    files with a Zone.Identifier (Mark of the Web), and running such an
+    unsigned `.ps1` file directly would be blocked under the `RemoteSigned`
+    execution policy (a common default, e.g. on Windows Server);
+    `Invoke-Expression` evaluates the content as a string rather than running
+    a script file, so it isn't subject to that restriction. The temp file is
+    removed afterwards regardless of the outcome. For safety, review the
+    downloaded script's contents (the temp file below) before it runs.
 
     Note: this script itself is fetched from the `master` branch below, so the
     bootstrap fetch is not integrity-pinned; only the *installed* claude-meter
@@ -18,16 +28,23 @@
     resolution fails.
 
 .EXAMPLE
-    irm https://raw.githubusercontent.com/yohi/claude-meter/master/install.ps1 | iex
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) "claude-meter-install-$([Guid]::NewGuid()).ps1"
+    try {
+        Invoke-WebRequest -Uri "https://raw.githubusercontent.com/yohi/claude-meter/master/install.ps1" -OutFile $tmp -ErrorAction Stop
+        Get-Content -Raw -Path $tmp | Invoke-Expression
+    } finally {
+        Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue
+    }
 
-    Downloads and runs the installer in the current PowerShell session.
+    Downloads the installer to a temp file, runs it in the current PowerShell
+    session, then removes the temp file.
 #>
 
 $ErrorActionPreference = "Stop"
 
 # Base git+https URL (without a ref). A specific ref (a release tag, by
-# default) is appended by Resolve-Ref() below so that a plain `irm | iex`
-# never installs an unreviewed `master` HEAD.
+# default) is appended by Resolve-Ref() below so that a plain one-line
+# install never installs an unreviewed `master` HEAD.
 $RepoBaseUrl = "git+https://github.com/yohi/claude-meter.git"
 $GitHubReleasesLatestUrl = "https://github.com/yohi/claude-meter/releases/latest"
 $UvInstallDocs = "https://docs.astral.sh/uv/getting-started/installation/"
