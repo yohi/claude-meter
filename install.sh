@@ -17,7 +17,11 @@
 
 set -eu
 
-REPO_URL="git+https://github.com/yohi/claude-meter.git"
+# Base git+https URL (without a ref). A specific ref (a release tag, by
+# default) is appended by resolve_ref()/install_package() below so that a
+# plain `curl | sh` never installs an unreviewed `master` HEAD.
+REPO_BASE_URL="git+https://github.com/yohi/claude-meter.git"
+GITHUB_RELEASES_LATEST_URL="https://github.com/yohi/claude-meter/releases/latest"
 UV_INSTALL_DOCS="https://docs.astral.sh/uv/getting-started/installation/"
 
 # Print a progress message to stdout.
@@ -30,20 +34,43 @@ err() {
 	printf 'Error: %s\n' "$1" >&2
 }
 
+# Resolve the git ref to install. Defaults to the latest published release
+# tag (resolved via GitHub's /releases/latest redirect) so this installer is
+# pinned to a reviewed, stable release instead of the master branch's
+# unreviewed HEAD. Set CLAUDE_METER_REF to override (e.g. to a specific tag,
+# a commit SHA, or "master" to opt back into HEAD).
+resolve_ref() {
+	if [ -n "${CLAUDE_METER_REF:-}" ]; then
+		printf '%s' "$CLAUDE_METER_REF"
+		return
+	fi
+	if command -v curl >/dev/null 2>&1; then
+		tag="$(curl -fsSL -o /dev/null -w '%{url_effective}' "$GITHUB_RELEASES_LATEST_URL" 2>/dev/null | sed -n 's#.*/tag/##p' || true)"
+		if [ -n "$tag" ]; then
+			printf '%s' "$tag"
+			return
+		fi
+	fi
+	err "Could not determine the latest release tag; falling back to the master branch (unreviewed HEAD)."
+	printf 'master'
+}
+
 # Install the claude-meter package using the first available installer.
 # Separated into its own function so tests can source this script (with
 # CLAUDE_METER_INSTALL_LIB=1) and exercise the launcher logic without running
 # a real package installation.
 install_package() {
+	ref="$(resolve_ref)"
+	repo_url="${REPO_BASE_URL}@${ref}"
 	if command -v uv >/dev/null 2>&1; then
-		info "Installing claude-meter with uv (uv tool install)..."
-		uv tool install "$REPO_URL"
+		info "Installing claude-meter ${ref} with uv (uv tool install)..."
+		uv tool install "$repo_url"
 	elif command -v pip3 >/dev/null 2>&1; then
-		info "uv not found; installing claude-meter with pip3 (--user)..."
-		pip3 install --user "$REPO_URL"
+		info "uv not found; installing claude-meter ${ref} with pip3 (--user)..."
+		pip3 install --user "$repo_url"
 	elif command -v python3 >/dev/null 2>&1; then
-		info "uv/pip3 not found; installing claude-meter with python3 -m pip (--user)..."
-		python3 -m pip install --user "$REPO_URL"
+		info "uv/pip3 not found; installing claude-meter ${ref} with python3 -m pip (--user)..."
+		python3 -m pip install --user "$repo_url"
 	else
 		err "No suitable installer found: none of uv, pip3, or python3 is available."
 		err "Install uv first, then re-run this script: $UV_INSTALL_DOCS"
