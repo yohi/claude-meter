@@ -1,6 +1,6 @@
-# claude-meter
-
-![claude-meter icon](assets/icon.png)
+<!-- markdownlint-disable MD033 -->
+<h1><img src="assets/icon.png" width="60" alt="claude-meter icon"> claude-meter</h1>
+<!-- markdownlint-enable MD033 -->
 
 Local-only analyzer for ClaudeCode usage and estimated AWS Bedrock cost.
 
