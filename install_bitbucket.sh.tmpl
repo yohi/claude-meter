@@ -3,7 +3,7 @@
 # (Linux / macOS, POSIX sh).
 #
 # The claude-meter package is distributed from a PRIVATE Bitbucket repository,
-# so this installer requires a Bitbucket App password with the
+# so this installer requires a Bitbucket API token with the
 # "Repositories: Read" scope.
 #
 # Intended usage (pass the credentials through environment variables so they do
@@ -13,8 +13,8 @@
 # other users on this host for the duration of the request, e.g. via `ps aux`
 # or `/proc/{pid}/cmdline`):
 #     export BITBUCKET_USER=<your-bitbucket-username>
-#     export BITBUCKET_APP_PASSWORD=<your-app-password>
-#     (tmp="$(mktemp)" && printf 'user = "%s:%s"\n' "$BITBUCKET_USER" "$BITBUCKET_APP_PASSWORD" \
+#     export BITBUCKET_API_TOKEN=<your-api-token>
+#     (tmp="$(mktemp)" && printf 'user = "%s:%s"\n' "$BITBUCKET_USER" "$BITBUCKET_API_TOKEN" \
 #       | curl -fsSL -K - -o "$tmp" \
 #       https://bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/<BITBUCKET_REPOSITORY_NAME>/raw/master/install.sh \
 #       && sh "$tmp"; status=$?; rm -f "$tmp"; exit $status)
@@ -63,7 +63,7 @@ err() {
 # so credentials are never taken from a prompt or a file.
 require_credentials() {
 	: "${BITBUCKET_USER:?Set BITBUCKET_USER before running this script.}"
-	: "${BITBUCKET_APP_PASSWORD:?Set BITBUCKET_APP_PASSWORD before running this script.}"
+	: "${BITBUCKET_API_TOKEN:?Set BITBUCKET_API_TOKEN before running this script.}"
 }
 
 # Resolve the git tag to install. Defaults to the latest tag on the private
@@ -77,7 +77,7 @@ resolve_ref() {
 		return
 	fi
 	if command -v curl >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
-		tag="$(printf 'user = "%s:%s"\n' "$BITBUCKET_USER" "$BITBUCKET_APP_PASSWORD" \
+		tag="$(printf 'user = "%s:%s"\n' "$BITBUCKET_USER" "$BITBUCKET_API_TOKEN" \
 			| curl -fsSL -K - "https://api.bitbucket.org/2.0/repositories/${BITBUCKET_WORKSPACE_NAME}/${BITBUCKET_REPOSITORY_NAME}/refs/tags?sort=-target.date&pagelen=1" 2>/dev/null \
 			| python3 -c "import json, sys
 values = json.load(sys.stdin).get('values') or []
@@ -98,17 +98,17 @@ print(values[0]['name'] if values else '')" 2>/dev/null || true)"
 # CLAUDE_METER_INSTALL_LIB=1) and exercise the launcher logic without running
 # a real package installation.
 install_package() {
-	# Provide the Bitbucket App password via a GIT_ASKPASS helper instead of
+	# Provide the Bitbucket API token via a GIT_ASKPASS helper instead of
 	# embedding it in the repo URL. Credentials passed as CLI arguments (e.g.
 	# inside a URL) are visible to other users on this host for the duration
 	# of the process via `ps aux` / `/proc/{pid}/cmdline`; GIT_ASKPASS avoids
 	# that exposure entirely, and nothing is written to disk beyond a
 	# short-lived temp script that only references the env var name (the
-	# password value itself is never persisted). This mirrors the pattern
+	# token value itself is never persisted). This mirrors the pattern
 	# already used for git auth in .github/workflows/release-please.yml.
 	askpass_script="$(mktemp)"
 	trap 'rm -f "$askpass_script"' EXIT
-	printf '#!/bin/sh\necho "$BITBUCKET_APP_PASSWORD"\n' >"$askpass_script"
+	printf '#!/bin/sh\necho "$BITBUCKET_API_TOKEN"\n' >"$askpass_script"
 	chmod +x "$askpass_script"
 	export GIT_ASKPASS="$askpass_script"
 	ref="$(resolve_ref)"
