@@ -93,7 +93,7 @@ jobs:
           find bitbucket-repo -mindepth 1 -maxdepth 1 -not -name ".git" -not -name "packages" -exec rm -rf {} +
 
           # ソースコード、設定ファイル、READMEなどをコピー (存在するもののみ)
-          for item in src pyproject.toml LICENSE; do
+          for item in src pyproject.toml LICENSE assets; do
             if [ -e "$item" ]; then
               cp -r "$item" bitbucket-repo/
             fi

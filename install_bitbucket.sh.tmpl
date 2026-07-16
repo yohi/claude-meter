@@ -3,21 +3,22 @@
 # (Linux / macOS, POSIX sh).
 #
 # The claude-meter package is distributed from a PRIVATE Bitbucket repository,
-# so this installer requires a Bitbucket API token with the
-# "Repositories: Read" scope.
+# so this installer requires a Bitbucket Repository Access Token (create one
+# under the repository's Settings -> Security -> Access tokens) with the
+# "Repository Read" scope. This token is tied to the repository itself, not
+# to a personal Atlassian account, so no separate username or email is
+# required.
 #
-# Intended usage (pass the credentials through environment variables so they do
-# NOT remain in your shell history or on screen, and feed them to curl via a
-# config file on stdin -- rather than `curl -u user:pass`, whose expanded
-# credentials would appear as a plain curl command-line argument visible to
-# other users on this host for the duration of the request, e.g. via `ps aux`
-# or `/proc/{pid}/cmdline`):
-#     export BITBUCKET_USER=<your-bitbucket-username>
-#     export BITBUCKET_EMAIL=<your-atlassian-account-email>
-#     export BITBUCKET_API_TOKEN=<your-api-token>
-#     (tmp="$(mktemp)" && printf 'user = "%s:%s"\n' "$BITBUCKET_EMAIL" "$BITBUCKET_API_TOKEN" \
+# Intended usage (pass the token through an environment variable so it does
+# NOT remain in your shell history or on screen, and send it to curl via a
+# config file on stdin -- rather than `curl -H "Authorization: Bearer ..."`,
+# whose expanded token would appear as a plain curl command-line argument
+# visible to other users on this host for the duration of the request, e.g.
+# via `ps aux` or `/proc/{pid}/cmdline`):
+#     export BITBUCKET_API_TOKEN=<your-repository-access-token>
+#     (tmp="$(mktemp)" && printf 'header = "Authorization: Bearer %s"\n' "$BITBUCKET_API_TOKEN" \
 #       | curl -fsSL -K - -o "$tmp" \
-#       https://bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/<BITBUCKET_REPOSITORY_NAME>/raw/master/install.sh \
+#       "https://api.bitbucket.org/2.0/repositories/<BITBUCKET_WORKSPACE_NAME>/<BITBUCKET_REPOSITORY_NAME>/src/master/install.sh" \
 #       && sh "$tmp"; status=$?; rm -f "$tmp"; exit $status)
 #
 # Downloading to a temp file first (rather than piping curl directly into
@@ -63,8 +64,6 @@ err() {
 # The POSIX "${var:?message}" expansion prints the message and exits when unset,
 # so credentials are never taken from a prompt or a file.
 require_credentials() {
-	: "${BITBUCKET_USER:?Set BITBUCKET_USER before running this script.}"
-	: "${BITBUCKET_EMAIL:?Set BITBUCKET_EMAIL before running this script.}"
 	: "${BITBUCKET_API_TOKEN:?Set BITBUCKET_API_TOKEN before running this script.}"
 }
 
@@ -79,7 +78,7 @@ resolve_ref() {
 		return
 	fi
 	if command -v curl >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
-		tag="$(printf 'user = "%s:%s"\n' "$BITBUCKET_EMAIL" "$BITBUCKET_API_TOKEN" \
+		tag="$(printf 'header = "Authorization: Bearer %s"\n' "$BITBUCKET_API_TOKEN" \
 			| curl -fsSL -K - "https://api.bitbucket.org/2.0/repositories/${BITBUCKET_WORKSPACE_NAME}/${BITBUCKET_REPOSITORY_NAME}/refs/tags?sort=-target.date&pagelen=1" 2>/dev/null \
 			| python3 -c "import json, sys
 values = json.load(sys.stdin).get('values') or []
@@ -114,7 +113,7 @@ install_package() {
 	chmod +x "$askpass_script"
 	export GIT_ASKPASS="$askpass_script"
 	ref="$(resolve_ref)"
-	repo_url="git+https://${BITBUCKET_USER}@bitbucket.org/${BITBUCKET_WORKSPACE_NAME}/${BITBUCKET_REPOSITORY_NAME}.git@${ref}"
+	repo_url="git+https://x-token-auth@bitbucket.org/${BITBUCKET_WORKSPACE_NAME}/${BITBUCKET_REPOSITORY_NAME}.git@${ref}"
 	if command -v uv >/dev/null 2>&1; then
 		info "Installing claude-meter with uv (uv tool install)..."
 		uv tool install "$repo_url"
