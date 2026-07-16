@@ -1,5 +1,7 @@
 # claude-meter
 
+![claude-meter icon](assets/icon.png)
+
 ClaudeCodeの利用ログおよびAWS Bedrockの推定コストを解析・表示する、ローカル完結型のツールです。
 
 ## クイックスタート

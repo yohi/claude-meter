@@ -1,5 +1,7 @@
 # claude-meter
 
+![claude-meter icon](assets/icon.png)
+
 Local-only analyzer for ClaudeCode usage and estimated AWS Bedrock cost.
 
 ## Quick start
