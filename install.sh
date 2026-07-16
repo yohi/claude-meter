@@ -4,7 +4,7 @@
 # Intended usage:
 #     (tmp="$(mktemp)" && curl -fsSL -o "$tmp" \
 #       https://raw.githubusercontent.com/yohi/claude-meter/master/install.sh \
-#       && sh "$tmp"; status=$?; rm -f "$tmp"; exit $status)
+#       && sh "$tmp"; rc=$?; rm -f "$tmp"; exit $rc)
 #
 # Downloading to a temp file first (rather than piping curl directly into
 # `sh`) means `sh` only runs after `curl` has exited successfully, so a
@@ -133,6 +133,7 @@ run_init() {
 # is no `cd` into a repo directory and no reference to repo-local files.
 create_launcher() {
 	os="$(uname -s)"
+	icon_path="$HOME/.local/share/icons/claude-meter.png"
 	# Embed the *resolved* absolute path rather than a bare `claude-meter`
 	# command name: double-clicking a desktop/GUI launcher does not always
 	# inherit this session's PATH (see ensure_on_path above), so relying on
@@ -159,11 +160,21 @@ Type=Application
 Name=claude-meter
 Comment=Local ClaudeCode usage and cost dashboard
 Exec=bash -c '"$claude_meter_path" start; exec "\$SHELL"'
-Icon=utilities-terminal
+Icon=$icon_path
 Terminal=true
 Categories=Utility;Development;
 LAUNCHER
 	fi
+}
+
+# Install the icon separately because assets/icon.png is outside the Python
+# package included in the uv/pip distribution.
+install_icon() {
+	icon_path="$HOME/.local/share/icons/claude-meter.png"
+	icon_url="https://raw.githubusercontent.com/yohi/claude-meter/${ref}/assets/icon.png"
+	info "Installing application icon: $icon_path"
+	mkdir -p "$(dirname "$icon_path")"
+	curl -fsSL -o "$icon_path" "$icon_url"
 }
 
 main() {
@@ -171,6 +182,7 @@ main() {
 	install_package
 	ensure_on_path
 	run_init
+	install_icon
 	create_launcher
 	info "Done. Launch the dashboard any time with: claude-meter start"
 }

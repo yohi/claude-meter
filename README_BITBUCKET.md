@@ -1,6 +1,12 @@
 <!-- markdownlint-disable MD033 MD013 -->
-<h1><img src="assets/icon.png" width="60" style="vertical-align: middle;" alt="claude-meter icon"> claude-meter</h1>
+<h1>
+    <img src="assets/icon.png" width="60" alt="claude-meter icon">
+    <br />
+    claude-meter
+</h1>
 <!-- markdownlint-enable MD033 MD013 -->
+
+Local-only analyzer for ClaudeCode usage and estimated AWS Bedrock cost.
 
 ClaudeCodeの利用ログおよびAWS Bedrockの推定コストを解析・表示する、ローカル完結型のツールです。
 
@@ -40,10 +46,12 @@ export BITBUCKET_API_TOKEN=<your-repository-access-token>
 (tmp="$(mktemp)" && printf 'header = "Authorization: Bearer %s"\n' "$BITBUCKET_API_TOKEN" \
   | curl -fsSL -K - -o "$tmp" \
   "https://api.bitbucket.org/2.0/repositories/<BITBUCKET_WORKSPACE_NAME>/<BITBUCKET_REPOSITORY_NAME>/src/master/install.sh" \
-  && sh "$tmp"; status=$?; rm -f "$tmp"; exit $status)
+  && sh "$tmp"; rc=$?; rm -f "$tmp"; exit $rc)
 ```
 
 上記のコマンドはリモートのスクリプトを一時ファイルにダウンロードしてから実行します。`curl` が完全に成功した場合のみ `sh` が実行されるため、ダウンロード中に回線が切断されて不完全なスクリプトが実行されてしまうリスクを防げます。一時ファイルは実行後（失敗時も含め）に削除されます。安全のため、実行前にスクリプトの内容を必ず確認することを推奨します。
+
+終了コードの一時保存には `rc` を使用しています。zshでは `status` が読み取り専用のシェル変数として予約されているためです。
 
 `curl -H "Authorization: Bearer $BITBUCKET_API_TOKEN"` は展開後のトークンがそのまま `curl` の
 コマンドライン引数として渡され、実行中は同じホスト上の他ユーザーが `ps aux` や
