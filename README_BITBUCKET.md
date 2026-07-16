@@ -1,9 +1,6 @@
-<!-- markdownlint-disable MD033 MD041 -->
-<table><tr>
-<td><img src="assets/icon.png" width="60" alt="claude-meter icon"></td>
-<td><h1>claude-meter</h1></td>
-</tr></table>
-<!-- markdownlint-enable MD033 MD041 -->
+<!-- markdownlint-disable MD033 MD013 -->
+<h1><img src="assets/icon.png" width="60" align="middle" alt="claude-meter icon"> claude-meter</h1>
+<!-- markdownlint-enable MD033 MD013 -->
 
 ClaudeCodeの利用ログおよびAWS Bedrockの推定コストを解析・表示する、ローカル完結型のツールです。
 
