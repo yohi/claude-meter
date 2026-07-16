@@ -1,6 +1,9 @@
-<!-- markdownlint-disable MD033 -->
-<h1><img src="assets/icon.png" width="60" alt="claude-meter icon"> claude-meter</h1>
-<!-- markdownlint-enable MD033 -->
+<!-- markdownlint-disable MD033 MD041 -->
+<table><tr>
+<td><img src="assets/icon.png" width="60" alt="claude-meter icon"></td>
+<td><h1>claude-meter</h1></td>
+</tr></table>
+<!-- markdownlint-enable MD033 MD041 -->
 
 Local-only analyzer for ClaudeCode usage and estimated AWS Bedrock cost.
 
