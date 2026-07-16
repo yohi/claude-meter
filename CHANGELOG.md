@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0](https://github.com/yohi/claude-meter/compare/v0.9.1...v1.0.0) (2026-07-16)
+
+
+### Bug Fixes
+
+* Bitbucketデプロイ時にassetsディレクトリがコピーされない問題を修正 ([24043f1](https://github.com/yohi/claude-meter/commit/24043f1d8b88b43405576252c374cf587563b525))
+
+
+### Miscellaneous Chores
+
+* 次回リリースをv1.0.0として発行する ([6d57416](https://github.com/yohi/claude-meter/commit/6d57416da3f66d283d86bb8e70a158cdccbcee46))
+
 ## [0.9.1](https://github.com/yohi/claude-meter/compare/v0.9.0...v0.9.1) (2026-07-16)
 
 
