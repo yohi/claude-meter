@@ -9,19 +9,23 @@
     `claude-meter start`. No local repository clone is required.
 
     Because the source repository is private, this installer requires a
-    Bitbucket API token with the "Repositories: Read" scope. Provide the
-    credentials through environment variables so they do NOT remain in your
-    shell history or on screen:
+    Bitbucket API token with the "Repositories: Read" scope. It uses two
+    separate credentials: your Bitbucket username (for Git operations) and
+    your Atlassian account email (for Basic Auth against Bitbucket's REST
+    and raw-content endpoints, which do not accept an API token paired with
+    a username). Provide the credentials through environment variables so
+    they do NOT remain in your shell history or on screen:
 
         $env:BITBUCKET_USER = "<your-bitbucket-username>"
+        $env:BITBUCKET_EMAIL = "<your-atlassian-account-email>"
         $env:BITBUCKET_API_TOKEN = "<your-api-token>"
-
-    Bitbucket's raw endpoint requires HTTP Basic authentication, so add an
+    Bitbucket's raw endpoint requires HTTP Basic authentication (using your
+    Atlassian account email, not your Bitbucket username), so add an
     Authorization header when downloading this script (note the backtick
     before the colon so PowerShell does not treat it as a drive-qualified
     variable):
 
-        $Headers = @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$env:BITBUCKET_USER`:$env:BITBUCKET_API_TOKEN")) }
+        $Headers = @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$env:BITBUCKET_EMAIL`:$env:BITBUCKET_API_TOKEN")) }
 
     Downloading to a temp file first (rather than piping `irm` directly into
     `iex`) means the download must complete fully before anything runs, so a
@@ -44,10 +48,11 @@
 
 .EXAMPLE
     $env:BITBUCKET_USER = "<your-bitbucket-username>"
+    $env:BITBUCKET_EMAIL = "<your-atlassian-account-email>"
     $env:BITBUCKET_API_TOKEN = "<your-api-token>"
     $tmp = Join-Path ([System.IO.Path]::GetTempPath()) "claude-meter-install-$([Guid]::NewGuid()).ps1"
     try {
-        $Headers = @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$env:BITBUCKET_USER`:$env:BITBUCKET_API_TOKEN")) }
+        $Headers = @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$env:BITBUCKET_EMAIL`:$env:BITBUCKET_API_TOKEN")) }
         Invoke-WebRequest -Headers $Headers -Uri "https://bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/<BITBUCKET_REPOSITORY_NAME>/raw/master/install.ps1" -OutFile $tmp -ErrorAction Stop
         Get-Content -Raw -Path $tmp | Invoke-Expression
     } finally {
@@ -79,7 +84,7 @@ function Resolve-Ref {
         return $env:CLAUDE_METER_REF
     }
     try {
-        $AuthHeader = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($env:BITBUCKET_USER):$($env:BITBUCKET_API_TOKEN)"))
+        $AuthHeader = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($env:BITBUCKET_EMAIL):$($env:BITBUCKET_API_TOKEN)"))
         $TagsUrl = "https://api.bitbucket.org/2.0/repositories/$BitbucketWorkspaceName/$BitbucketRepositoryName/refs/tags?sort=-target.date&pagelen=1"
         $Response = Invoke-RestMethod -Uri $TagsUrl -Headers @{ Authorization = $AuthHeader }
         if ($Response.values -and $Response.values.Count -gt 0) {
@@ -97,6 +102,9 @@ Write-Host "==> Starting claude-meter installation..."
 # 0. Require Bitbucket credentials (API token with the Repositories: Read scope).
 if (-not $env:BITBUCKET_USER) {
     throw "BITBUCKET_USER is not set. Set `$env:BITBUCKET_USER before running this script."
+}
+if (-not $env:BITBUCKET_EMAIL) {
+    throw "BITBUCKET_EMAIL is not set. Set `$env:BITBUCKET_EMAIL before running this script."
 }
 if (-not $env:BITBUCKET_API_TOKEN) {
     throw "BITBUCKET_API_TOKEN is not set. Set `$env:BITBUCKET_API_TOKEN before running this script."

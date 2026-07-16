@@ -13,8 +13,9 @@
 # other users on this host for the duration of the request, e.g. via `ps aux`
 # or `/proc/{pid}/cmdline`):
 #     export BITBUCKET_USER=<your-bitbucket-username>
+#     export BITBUCKET_EMAIL=<your-atlassian-account-email>
 #     export BITBUCKET_API_TOKEN=<your-api-token>
-#     (tmp="$(mktemp)" && printf 'user = "%s:%s"\n' "$BITBUCKET_USER" "$BITBUCKET_API_TOKEN" \
+#     (tmp="$(mktemp)" && printf 'user = "%s:%s"\n' "$BITBUCKET_EMAIL" "$BITBUCKET_API_TOKEN" \
 #       | curl -fsSL -K - -o "$tmp" \
 #       https://bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/<BITBUCKET_REPOSITORY_NAME>/raw/master/install.sh \
 #       && sh "$tmp"; status=$?; rm -f "$tmp"; exit $status)
@@ -63,6 +64,7 @@ err() {
 # so credentials are never taken from a prompt or a file.
 require_credentials() {
 	: "${BITBUCKET_USER:?Set BITBUCKET_USER before running this script.}"
+	: "${BITBUCKET_EMAIL:?Set BITBUCKET_EMAIL before running this script.}"
 	: "${BITBUCKET_API_TOKEN:?Set BITBUCKET_API_TOKEN before running this script.}"
 }
 
@@ -77,7 +79,7 @@ resolve_ref() {
 		return
 	fi
 	if command -v curl >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
-		tag="$(printf 'user = "%s:%s"\n' "$BITBUCKET_USER" "$BITBUCKET_API_TOKEN" \
+		tag="$(printf 'user = "%s:%s"\n' "$BITBUCKET_EMAIL" "$BITBUCKET_API_TOKEN" \
 			| curl -fsSL -K - "https://api.bitbucket.org/2.0/repositories/${BITBUCKET_WORKSPACE_NAME}/${BITBUCKET_REPOSITORY_NAME}/refs/tags?sort=-target.date&pagelen=1" 2>/dev/null \
 			| python3 -c "import json, sys
 values = json.load(sys.stdin).get('values') or []

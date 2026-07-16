@@ -26,14 +26,15 @@ uv run claude-meter start   # または: uv run cm start
 >
 > 本ドキュメントは API Token を使用した認証方法に更新されています。
 
-プライベートリポジトリからパッケージを取得するため、Repositories: Read スコープを付与した Bitbucket の API Token が必要です。
+プライベートリポジトリからパッケージを取得するため、Repositories: Read スコープを付与した Bitbucket の API Token と、Basic認証用の Atlassian アカウントの email アドレスが必要です。API Token は email との組み合わせでのみ REST API・raw ダウンロードエンドポイントの認証に使用できます（Bitbucket のユーザー名は Git 操作にのみ使用します）。
 
 認証情報がコマンド履歴や画面に残らないよう、次のように環境変数で認証情報を渡したうえで実行してください。`claude-meter` コマンドのインストール、`claude-meter init` の実行、デスクトップランチャーの作成までを自動で行います（ローカルへのクローンは不要です）。
 
 ```bash
 export BITBUCKET_USER=<your-bitbucket-username>
+export BITBUCKET_EMAIL=<your-atlassian-account-email>
 export BITBUCKET_API_TOKEN=<your-api-token>
-(tmp="$(mktemp)" && printf 'user = "%s:%s"\n' "$BITBUCKET_USER" "$BITBUCKET_API_TOKEN" \
+(tmp="$(mktemp)" && printf 'user = "%s:%s"\n' "$BITBUCKET_EMAIL" "$BITBUCKET_API_TOKEN" \
   | curl -fsSL -K - -o "$tmp" \
   https://bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/<BITBUCKET_REPOSITORY_NAME>/raw/master/install.sh \
   && sh "$tmp"; status=$?; rm -f "$tmp"; exit $status)
@@ -41,7 +42,7 @@ export BITBUCKET_API_TOKEN=<your-api-token>
 
 上記のコマンドはリモートのスクリプトを一時ファイルにダウンロードしてから実行します。`curl` が完全に成功した場合のみ `sh` が実行されるため、ダウンロード中に回線が切断されて不完全なスクリプトが実行されてしまうリスクを防げます。一時ファイルは実行後（失敗時も含め）に削除されます。安全のため、実行前にスクリプトの内容を必ず確認することを推奨します。
 
-`curl -u "$BITBUCKET_USER:$BITBUCKET_API_TOKEN"` は展開後の認証情報がそのまま `curl` の
+`curl -u "$BITBUCKET_EMAIL:$BITBUCKET_API_TOKEN"` は展開後の認証情報がそのまま `curl` の
 コマンドライン引数として渡され、実行中は同じホスト上の他ユーザーが `ps aux` や
 `/proc/{pid}/cmdline` から読み取れてしまいます。上記のコマンドは代わりに認証情報を標準入力経由の
 設定ファイルとして `curl -K -` に渡すため、プロセス引数には一切現れません。
@@ -54,18 +55,26 @@ export BITBUCKET_API_TOKEN=<your-api-token>
 
 ### `uvx` を使用する場合（Bitbucketリポジトリから直接実行）
 
+<!-- markdownlint-disable MD013 -->
 ```bash
 # Gitリポジトリから直接実行する場合
-# ※プライベートリポジトリの場合は、SSH接続（git+ssh://）を使用するか、HTTPS URLに認証情報（API Token など）を含めてください。
+# ※プライベートリポジトリの場合は、SSH接続（git+ssh://）を使用するか、下記のHTTPS接続の例（GIT_ASKPASS使用）を参照してください。
 
 ## SSH接続を使用する場合（推奨・要SSHキー設定）
 uvx --from git+ssh://git@bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/claude-meter.git claude-meter start
 
 ## HTTPS接続を使用する場合
 uvx --from git+https://bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/claude-meter.git claude-meter start
-# プライベートリポジトリでHTTPSを使用する場合の例:
-# uvx --from git+https://<USERNAME>:<API_TOKEN>@bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/claude-meter.git claude-meter start
+# プライベートリポジトリでHTTPS接続を使用する場合は、認証情報をURLに直接埋め込まないでください
+# （シェル履歴・プロセス引数・Gitのリモート設定に平文で残ってしまいます）。
+# 代わりに GIT_ASKPASS 経由で API Token を渡してください:
+# export BITBUCKET_USER=<your-bitbucket-username>
+# export BITBUCKET_API_TOKEN=<your-api-token>
+# askpass="$(mktemp)" && printf '#!/bin/sh\necho "$BITBUCKET_API_TOKEN"\n' > "$askpass" && chmod +x "$askpass"
+# GIT_ASKPASS="$askpass" uvx --from "git+https://${BITBUCKET_USER}@bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/claude-meter.git" claude-meter start
+# rm -f "$askpass"
 ```
+<!-- markdownlint-enable MD013 -->
 
 ### `pip` を使用する場合
 
