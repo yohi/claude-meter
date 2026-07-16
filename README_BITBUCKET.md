@@ -180,6 +180,14 @@ ui:
 
 アーキテクチャ、データソース、SQLiteスキーマ、モデル正規化、UIページの設計、および対象外とする要件の詳細については、[SPEC.md](SPEC.md)（英語）を参照してください。
 
+## デスクトップランチャー
+
+ワンラインインストーラーは通常起動用のランチャーと、ターミナルを表示するデバッグ用ランチャーを作成します。
+
+- Linux: アプリを右クリックして **デバッグモードで開く** を選択します。
+- macOS: 通常は `~/Desktop/claude-meter.app`、デバッグ時は `~/Desktop/claude-meter-debug.command` を使用します。
+- Windows: 通常は `%USERPROFILE%\Desktop\claude-meter.vbs`、デバッグ時は `%USERPROFILE%\Desktop\claude-meter-debug.bat` を使用します。
+
 ## コスト計算方法
 
 コストは以下の計算式に基づいてコンポーネントごとに算出されます。

@@ -177,14 +177,37 @@ create_launcher() {
 	# launcher exists to solve.
 	claude_meter_path="$(command -v claude-meter)"
 	if [ "$os" = "Darwin" ]; then
-		launcher="$HOME/Desktop/claude-meter.command"
+		launcher="$HOME/Desktop/claude-meter.app"
+		debug_launcher="$HOME/Desktop/claude-meter-debug.command"
 		info "Creating macOS launcher: $launcher"
 		mkdir -p "$HOME/Desktop"
-		cat >"$launcher" <<LAUNCHER
+mkdir -p "$launcher/Contents/MacOS"
+		cat >"$launcher/Contents/MacOS/claude-meter" <<LAUNCHER
 #!/bin/bash
 "$claude_meter_path" start
 LAUNCHER
-		chmod +x "$launcher"
+		chmod +x "$launcher/Contents/MacOS/claude-meter"
+		cat >"$launcher/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>claude-meter</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.claude-meter.launcher</string>
+    <key>CFBundleName</key>
+    <string>claude-meter</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+</dict>
+</plist>
+PLIST
+		cat >"$debug_launcher" <<LAUNCHER
+#!/bin/bash
+"$claude_meter_path" start
+LAUNCHER
+		chmod +x "$debug_launcher"
 	else
 		launcher_dir="$HOME/.local/share/applications"
 		launcher="$launcher_dir/claude-meter.desktop"
@@ -197,8 +220,14 @@ Name=claude-meter
 Comment=Local ClaudeCode usage and cost dashboard
 Exec=bash -c '"$claude_meter_path" start; exec "\$SHELL"'
 Icon=$icon_path
-Terminal=true
+Terminal=false
 Categories=Utility;Development;
+Actions=Debug;
+
+[Desktop Action Debug]
+Name=デバッグモードで開く
+Exec=bash -c '"$claude_meter_path" start; exec "\$SHELL"'
+Terminal=true
 LAUNCHER
 	fi
 }

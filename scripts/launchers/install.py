@@ -56,6 +56,10 @@ class LauncherPlan:
     destination_dir: Path
     make_executable: bool
     icon_hint: str
+    debug_template_name: str | None = None
+    debug_output_name: str | None = None
+    debug_make_executable: bool = False
+    normal_bundle: bool = False
 
 
 def build_plan(platform: str, home: Path) -> LauncherPlan:
@@ -65,24 +69,32 @@ def build_plan(platform: str, home: Path) -> LauncherPlan:
     """
     if platform == "win32":
         return LauncherPlan(
-            template_name="claude-meter.bat.tmpl",
-            output_name="claude-meter.bat",
+            template_name="claude-meter.vbs.tmpl",
+            output_name="claude-meter.vbs",
             destination_dir=home / "Desktop",
             make_executable=False,
+            debug_template_name="claude-meter-debug.bat.tmpl",
+            debug_output_name="claude-meter-debug.bat",
             icon_hint=(
-                "Windows: right-click the .bat to create a shortcut, then open "
+                "Windows: run claude-meter.vbs normally; use "
+                "claude-meter-debug.bat for a visible console. To set an icon, "
+                "create a shortcut and open "
                 "Properties -> Change Icon and pick a .ico file."
             ),
         )
     if platform == "darwin":
         return LauncherPlan(
-            template_name="claude-meter.command.tmpl",
-            output_name="claude-meter.command",
+            template_name="claude-meter.app/Contents/MacOS/claude-meter.tmpl",
+            output_name="claude-meter.app",
             destination_dir=home / "Desktop",
             make_executable=True,
+            debug_template_name="claude-meter-debug.command.tmpl",
+            debug_output_name="claude-meter-debug.command",
+            debug_make_executable=True,
+            normal_bundle=True,
             icon_hint=(
-                "macOS: select the .command file in Finder, press Cmd+I, then "
-                "drag an image onto the icon in the Info window's title bar."
+                "macOS: double-click claude-meter.app normally; use "
+                "claude-meter-debug.command for a visible Terminal."
             ),
         )
     return LauncherPlan(
@@ -149,6 +161,10 @@ def _escape_bash_double_quoted(value: str) -> str:
     return _BASH_DQ_SPECIAL_RE.sub(r"\\\1", value)
 
 
+def _escape_vbs_string(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
+
+
 def render_template(template_path: Path, repo_root: Path) -> str:
     """Read ``template_path`` and substitute the repository-root placeholder(s),
     escaping the value for the destination format so that paths containing
@@ -169,24 +185,63 @@ def render_template(template_path: Path, repo_root: Path) -> str:
         return text.replace(SHELL_ARG_PLACEHOLDER, shell_arg)
     if kind == ".bat":
         return text.replace(PLACEHOLDER, _escape_cmd_bat(repo_root_str))
+    if kind == ".vbs":
+        return text.replace(PLACEHOLDER, _escape_vbs_string(repo_root_str))
     # .command (and anything else): a plain POSIX shell script.
     return text.replace(PLACEHOLDER, _escape_posix_shell(repo_root_str))
 
 
 def install_launcher(plan: LauncherPlan, repo_root: Path, launcher_dir: Path) -> Path:
     """Render and write the launcher described by ``plan``; return its path."""
-    template_path = launcher_dir / plan.template_name
+    if plan.normal_bundle:
+        return install_app_bundle(plan, repo_root, launcher_dir)
+    return install_template(
+        plan.template_name,
+        plan.destination_dir / plan.output_name,
+        repo_root,
+        launcher_dir,
+        plan.make_executable,
+    )
+
+
+def install_template(
+    template_name: str,
+    output_path: Path,
+    repo_root: Path,
+    launcher_dir: Path,
+    make_executable: bool,
+) -> Path:
+    template_path = launcher_dir / template_name
     rendered = render_template(template_path, repo_root)
 
-    plan.destination_dir.mkdir(parents=True, exist_ok=True)
-    output_path = plan.destination_dir / plan.output_name
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(rendered, encoding="utf-8")
 
-    if plan.make_executable:
+    if make_executable:
         current_mode = output_path.stat().st_mode
         output_path.chmod(current_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
     return output_path
+
+
+def install_app_bundle(plan: LauncherPlan, repo_root: Path, launcher_dir: Path) -> Path:
+    bundle_path = plan.destination_dir / plan.output_name
+    contents_path = bundle_path / "Contents"
+    install_template(
+        plan.template_name,
+        contents_path / "MacOS" / "claude-meter",
+        repo_root,
+        launcher_dir,
+        True,
+    )
+    install_template(
+        "claude-meter.app/Contents/Info.plist.tmpl",
+        contents_path / "Info.plist",
+        repo_root,
+        launcher_dir,
+        False,
+    )
+    return bundle_path
 
 
 def main() -> None:
@@ -196,6 +251,15 @@ def main() -> None:
     icon_path = REPO_ROOT / "assets" / "icon.png"
 
     print(f"Installed claude-meter launcher: {output_path}")
+    if plan.debug_template_name is not None and plan.debug_output_name is not None:
+        debug_path = install_template(
+            plan.debug_template_name,
+            plan.destination_dir / plan.debug_output_name,
+            REPO_ROOT,
+            LAUNCHER_DIR,
+            plan.debug_make_executable,
+        )
+        print(f"Installed claude-meter debug launcher: {debug_path}")
     print(f"Repository root: {REPO_ROOT}")
     print(f"Suggested icon location: {icon_path}")
     print(plan.icon_hint)

@@ -81,12 +81,7 @@ def test_render_template_desktop_exec_roundtrips_special_characters(tmp_path: Pa
     match = re.match(r"^Exec=bash -c '(.*)'$", exec_line)
     assert match is not None
     bash_cmd = match.group(1)
-    # Replace the real command with a no-op so the test doesn't actually try
-    # to launch claude-meter; then print the directory bash actually `cd`'d
-    # into to confirm the repository root round-tripped correctly.
-    bash_cmd = bash_cmd.replace("claude-meter start", "true").replace(
-        'exec "$SHELL"', "pwd"
-    )
+    bash_cmd = bash_cmd.replace("claude-meter start", "pwd")
     result = subprocess.run(
         ["bash", "-c", bash_cmd],
         capture_output=True,
@@ -97,6 +92,56 @@ def test_render_template_desktop_exec_roundtrips_special_characters(tmp_path: Pa
 
     icon_line = next(line for line in rendered.splitlines() if line.startswith("Icon="))
     assert icon_line == f"Icon={repo_root}/assets/icon.png"
+
+    assert "Terminal=false" in rendered
+    assert "Actions=Debug;" in rendered
+    assert "[Desktop Action Debug]" in rendered
+    assert "Name=デバッグモードで開く" in rendered
+    assert rendered.count("Terminal=true") == 1
+
+
+def test_build_plan_includes_debug_launchers(tmp_path: Path) -> None:
+    linux = launcher_install.build_plan("linux", tmp_path)
+    assert linux.debug_template_name is None
+
+    macos = launcher_install.build_plan("darwin", tmp_path)
+    assert macos.output_name == "claude-meter.app"
+    assert macos.debug_output_name == "claude-meter-debug.command"
+    assert macos.normal_bundle is True
+    assert macos.debug_make_executable is True
+
+    windows = launcher_install.build_plan("win32", tmp_path)
+    assert windows.output_name == "claude-meter.vbs"
+    assert windows.debug_output_name == "claude-meter-debug.bat"
+
+
+def test_render_template_vbs_escapes_double_quotes(tmp_path: Path) -> None:
+    template = tmp_path / "launcher.vbs.tmpl"
+    template.write_text("shell.CurrentDirectory = __REPO_ROOT__\n", encoding="utf-8")
+
+    rendered = launcher_install.render_template(template, Path('C:/a "quoted"/repo'))
+
+    assert rendered == 'shell.CurrentDirectory = "C:/a ""quoted""/repo"\n'
+
+
+def test_install_macos_launcher_creates_app_and_debug_script(tmp_path: Path) -> None:
+    plan = launcher_install.build_plan("darwin", tmp_path)
+    launcher_dir = _INSTALL_PY.parent
+
+    app_path = launcher_install.install_launcher(plan, Path("/repo"), launcher_dir)
+    debug_path = launcher_install.install_template(
+        plan.debug_template_name or "",
+        plan.destination_dir / (plan.debug_output_name or ""),
+        Path("/repo"),
+        launcher_dir,
+        plan.debug_make_executable,
+    )
+
+    assert app_path == tmp_path / "Desktop" / "claude-meter.app"
+    assert (app_path / "Contents" / "Info.plist").is_file()
+    assert (app_path / "Contents" / "MacOS" / "claude-meter").is_file()
+    assert debug_path.name == "claude-meter-debug.command"
+    assert debug_path.stat().st_mode & 0o111
 
 
 def test_render_template_desktop_rejects_single_quote(tmp_path: Path) -> None:
