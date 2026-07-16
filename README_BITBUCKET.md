@@ -1,5 +1,5 @@
 <!-- markdownlint-disable MD033 MD013 -->
-<h1><img src="assets/icon.png" width="60" align="middle" alt="claude-meter icon"> claude-meter</h1>
+<h1><img src="assets/icon.png" width="60" style="vertical-align: middle;" alt="claude-meter icon"> claude-meter</h1>
 <!-- markdownlint-enable MD033 MD013 -->
 
 ClaudeCodeの利用ログおよびAWS Bedrockの推定コストを解析・表示する、ローカル完結型のツールです。
