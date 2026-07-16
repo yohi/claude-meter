@@ -9,23 +9,20 @@
     `claude-meter start`. No local repository clone is required.
 
     Because the source repository is private, this installer requires a
-    Bitbucket API token with the "Repositories: Read" scope. It uses two
-    separate credentials: your Bitbucket username (for Git operations) and
-    your Atlassian account email (for Basic Auth against Bitbucket's REST
-    and raw-content endpoints, which do not accept an API token paired with
-    a username). Provide the credentials through environment variables so
-    they do NOT remain in your shell history or on screen:
+    Bitbucket Repository Access Token (create one under the repository's
+    Settings -> Security -> Access tokens) with the "Repository Read" scope.
+    This token is tied to the repository itself, not to a personal Atlassian
+    account, so no separate username or email is required. Provide it
+    through an environment variable so it does NOT remain in your shell
+    history or on screen:
 
-        $env:BITBUCKET_USER = "<your-bitbucket-username>"
-        $env:BITBUCKET_EMAIL = "<your-atlassian-account-email>"
-        $env:BITBUCKET_API_TOKEN = "<your-api-token>"
-    Bitbucket's raw endpoint requires HTTP Basic authentication (using your
-    Atlassian account email, not your Bitbucket username), so add an
-    Authorization header when downloading this script (note the backtick
-    before the colon so PowerShell does not treat it as a drive-qualified
-    variable):
+        $env:BITBUCKET_API_TOKEN = "<your-repository-access-token>"
 
-        $Headers = @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$env:BITBUCKET_EMAIL`:$env:BITBUCKET_API_TOKEN")) }
+    Downloading this script itself uses the Bitbucket REST API (which
+    accepts the token directly as a Bearer credential), so add an
+    Authorization header when downloading it:
+
+        $Headers = @{ Authorization = "Bearer $env:BITBUCKET_API_TOKEN" }
 
     Downloading to a temp file first (rather than piping `irm` directly into
     `iex`) means the download must complete fully before anything runs, so a
@@ -47,13 +44,11 @@
     unpinned default-branch HEAD if that resolution fails.
 
 .EXAMPLE
-    $env:BITBUCKET_USER = "<your-bitbucket-username>"
-    $env:BITBUCKET_EMAIL = "<your-atlassian-account-email>"
-    $env:BITBUCKET_API_TOKEN = "<your-api-token>"
+    $env:BITBUCKET_API_TOKEN = "<your-repository-access-token>"
     $tmp = Join-Path ([System.IO.Path]::GetTempPath()) "claude-meter-install-$([Guid]::NewGuid()).ps1"
     try {
-        $Headers = @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$env:BITBUCKET_EMAIL`:$env:BITBUCKET_API_TOKEN")) }
-        Invoke-WebRequest -Headers $Headers -Uri "https://bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/<BITBUCKET_REPOSITORY_NAME>/raw/master/install.ps1" -OutFile $tmp -ErrorAction Stop
+        $Headers = @{ Authorization = "Bearer $env:BITBUCKET_API_TOKEN" }
+        Invoke-WebRequest -Headers $Headers -Uri "https://api.bitbucket.org/2.0/repositories/<BITBUCKET_WORKSPACE_NAME>/<BITBUCKET_REPOSITORY_NAME>/src/master/install.ps1" -OutFile $tmp -ErrorAction Stop
         Get-Content -Raw -Path $tmp | Invoke-Expression
     } finally {
         Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue
@@ -84,7 +79,7 @@ function Resolve-Ref {
         return $env:CLAUDE_METER_REF
     }
     try {
-        $AuthHeader = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($env:BITBUCKET_EMAIL):$($env:BITBUCKET_API_TOKEN)"))
+        $AuthHeader = "Bearer $($env:BITBUCKET_API_TOKEN)"
         $TagsUrl = "https://api.bitbucket.org/2.0/repositories/$BitbucketWorkspaceName/$BitbucketRepositoryName/refs/tags?sort=-target.date&pagelen=1"
         $Response = Invoke-RestMethod -Uri $TagsUrl -Headers @{ Authorization = $AuthHeader }
         if ($Response.values -and $Response.values.Count -gt 0) {
@@ -99,13 +94,7 @@ function Resolve-Ref {
 
 Write-Host "==> Starting claude-meter installation..."
 
-# 0. Require Bitbucket credentials (API token with the Repositories: Read scope).
-if (-not $env:BITBUCKET_USER) {
-    throw "BITBUCKET_USER is not set. Set `$env:BITBUCKET_USER before running this script."
-}
-if (-not $env:BITBUCKET_EMAIL) {
-    throw "BITBUCKET_EMAIL is not set. Set `$env:BITBUCKET_EMAIL before running this script."
-}
+# 0. Require a Bitbucket Repository Access Token (Repository Read scope).
 if (-not $env:BITBUCKET_API_TOKEN) {
     throw "BITBUCKET_API_TOKEN is not set. Set `$env:BITBUCKET_API_TOKEN before running this script."
 }
@@ -123,7 +112,7 @@ Set-Content -Path $AskPassPath -Value "@echo %BITBUCKET_API_TOKEN%" -Encoding as
 try {
     $env:GIT_ASKPASS = $AskPassPath
     $Ref = Resolve-Ref
-    $RepoUrl = "git+https://$($env:BITBUCKET_USER)@bitbucket.org/$BitbucketWorkspaceName/$BitbucketRepositoryName.git@$Ref"
+    $RepoUrl = "git+https://x-token-auth@bitbucket.org/$BitbucketWorkspaceName/$BitbucketRepositoryName.git@$Ref"
 
     # 1. Install the package with the first available installer.
     if (Test-CommandExists -Name "uv") {

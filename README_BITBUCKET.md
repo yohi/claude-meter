@@ -24,27 +24,30 @@ uv run claude-meter start   # または: uv run cm start
 > - 2026年6月9日: 既存 App password の段階的な停止が開始
 > - 2026年7月28日: App password が完全に削除される
 >
-> 本ドキュメントは API Token を使用した認証方法に更新されています。
+> 本ドキュメントは、この非推奨化とは無関係な Bitbucket の Repository Access Token
+> （リポジトリ単位のトークン）を使用した認証方法で構成されています。
 
-プライベートリポジトリからパッケージを取得するため、Repositories: Read スコープを付与した Bitbucket の API Token と、Basic認証用の Atlassian アカウントの email アドレスが必要です。API Token は email との組み合わせでのみ REST API・raw ダウンロードエンドポイントの認証に使用できます（Bitbucket のユーザー名は Git 操作にのみ使用します）。
+プライベートリポジトリからパッケージを取得するため、対象リポジトリの Settings → Security →
+Access tokens で作成した Repository Access Token（`Repository Read` スコープ）が必要です。
+個人の Atlassian アカウントとは無関係なトークンのため、email やユーザー名を別途用意する必要は
+ありません。REST API・raw取得は `Authorization: Bearer` ヘッダーで、Git操作はユーザー名
+`x-token-auth` とトークンで認証します。
 
 認証情報がコマンド履歴や画面に残らないよう、次のように環境変数で認証情報を渡したうえで実行してください。`claude-meter` コマンドのインストール、`claude-meter init` の実行、デスクトップランチャーの作成までを自動で行います（ローカルへのクローンは不要です）。
 
 ```bash
-export BITBUCKET_USER=<your-bitbucket-username>
-export BITBUCKET_EMAIL=<your-atlassian-account-email>
-export BITBUCKET_API_TOKEN=<your-api-token>
-(tmp="$(mktemp)" && printf 'user = "%s:%s"\n' "$BITBUCKET_EMAIL" "$BITBUCKET_API_TOKEN" \
+export BITBUCKET_API_TOKEN=<your-repository-access-token>
+(tmp="$(mktemp)" && printf 'header = "Authorization: Bearer %s"\n' "$BITBUCKET_API_TOKEN" \
   | curl -fsSL -K - -o "$tmp" \
-  https://bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/<BITBUCKET_REPOSITORY_NAME>/raw/master/install.sh \
+  "https://api.bitbucket.org/2.0/repositories/<BITBUCKET_WORKSPACE_NAME>/<BITBUCKET_REPOSITORY_NAME>/src/master/install.sh" \
   && sh "$tmp"; status=$?; rm -f "$tmp"; exit $status)
 ```
 
 上記のコマンドはリモートのスクリプトを一時ファイルにダウンロードしてから実行します。`curl` が完全に成功した場合のみ `sh` が実行されるため、ダウンロード中に回線が切断されて不完全なスクリプトが実行されてしまうリスクを防げます。一時ファイルは実行後（失敗時も含め）に削除されます。安全のため、実行前にスクリプトの内容を必ず確認することを推奨します。
 
-`curl -u "$BITBUCKET_EMAIL:$BITBUCKET_API_TOKEN"` は展開後の認証情報がそのまま `curl` の
+`curl -H "Authorization: Bearer $BITBUCKET_API_TOKEN"` は展開後のトークンがそのまま `curl` の
 コマンドライン引数として渡され、実行中は同じホスト上の他ユーザーが `ps aux` や
-`/proc/{pid}/cmdline` から読み取れてしまいます。上記のコマンドは代わりに認証情報を標準入力経由の
+`/proc/{pid}/cmdline` から読み取れてしまいます。上記のコマンドは代わりにヘッダー指定を標準入力経由の
 設定ファイルとして `curl -K -` に渡すため、プロセス引数には一切現れません。
 
 なお、この `curl` コマンド自体は `master` ブランチから取得するため、取得元スクリプトそのものは
@@ -67,11 +70,11 @@ uvx --from git+ssh://git@bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/claude-meter.g
 uvx --from git+https://bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/claude-meter.git claude-meter start
 # プライベートリポジトリでHTTPS接続を使用する場合は、認証情報をURLに直接埋め込まないでください
 # （シェル履歴・プロセス引数・Gitのリモート設定に平文で残ってしまいます）。
-# 代わりに GIT_ASKPASS 経由で API Token を渡してください:
-# export BITBUCKET_USER=<your-bitbucket-username>
-# export BITBUCKET_API_TOKEN=<your-api-token>
+# 代わりに GIT_ASKPASS 経由で Repository Access Token を渡してください
+# （ユーザー名は Bitbucket の規約で固定文字列 x-token-auth を使用します）:
+# export BITBUCKET_API_TOKEN=<your-repository-access-token>
 # askpass="$(mktemp)" && printf '#!/bin/sh\necho "$BITBUCKET_API_TOKEN"\n' > "$askpass" && chmod +x "$askpass"
-# GIT_ASKPASS="$askpass" uvx --from "git+https://${BITBUCKET_USER}@bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/claude-meter.git" claude-meter start
+# GIT_ASKPASS="$askpass" uvx --from "git+https://x-token-auth@bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/claude-meter.git" claude-meter start
 # rm -f "$askpass"
 ```
 <!-- markdownlint-enable MD013 -->
