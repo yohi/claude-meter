@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.9.1](https://github.com/yohi/claude-meter/compare/v0.9.0...v0.9.1) (2026-07-16)
+
+
+### Bug Fixes
+
+* BitbucketインストーラーのURL埋め込みトークンとREST認証情報の混在を修正 ([9447c3e](https://github.com/yohi/claude-meter/commit/9447c3e2d97dac0ce60aab80a476c8d78ba6cec2))
+* install_bitbucket テンプレートのApp Password参照をAPI Tokenに修正 ([132730b](https://github.com/yohi/claude-meter/commit/132730b5efe07ee504581565ccf16b1ea0046723))
+
+
+### Documentation
+
+* Bitbucket App PasswordをAPI Token認証に更新 ([9908029](https://github.com/yohi/claude-meter/commit/99080290f1ad2ffb2da05f86f616c982ced4a972))
+* READMEにclaude-meterアイコンを追加 ([38db142](https://github.com/yohi/claude-meter/commit/38db14218f5e74934a39766fd0477e12d7f40280))
+
 ## [0.9.0](https://github.com/yohi/claude-meter/compare/v0.8.0...v0.9.0) (2026-07-15)
 
 
