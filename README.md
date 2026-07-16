@@ -309,17 +309,31 @@ pydantic-settings, Altair, pandas, Click.
 To allow GitHub Actions to build and deploy packages to the Bitbucket
 repository automatically, set up the following authentication settings:
 
-### 1. Issue an App password in Bitbucket
+<!-- markdownlint-disable MD013 -->
+> **Important**: Bitbucket App passwords have been deprecated by Atlassian and will be
+> permanently removed on July 28, 2026. The timeline is as follows:
+>
+> - June 9, 2025: Deprecation announced; 12-month transition period begins.
+> - September 9, 2025: Creation of new App passwords disabled (existing ones still work).
+> - June 9, 2026: Controlled brownouts of existing App passwords begin.
+> - July 28, 2026: App passwords fully removed.
+>
+> This documentation has been updated to use API tokens instead.
+<!-- markdownlint-enable MD013 -->
+
+### 1. Create an API token in Bitbucket
 
 1. Log in to Bitbucket, click on your profile icon in the top right, and
    select **Personal settings**.
-2. Select **App passwords** under **Access management** on the left menu.
-3. Click **Create app password**.
-4. Enter the following details:
+2. Click on **Atlassian account settings** (or navigate to your account settings).
+3. In the left menu, select **Security** under the account settings.
+4. Scroll to **Create and manage API tokens** and click **Create API token**.
+5. Enter the following details:
    - **Label**: `GitHub Actions Deploy` (or any descriptive label)
-   - **Permissions**:
+   - **Expiry**: Set an appropriate expiration date (e.g., 90 days or 1 year)
+   - **Permissions**: Select **Bitbucket** as the app, then assign scopes:
      - **Repositories**: **Write** (and Read)
-5. Click **Create** and copy the generated password.
+6. Click **Create** and copy the generated token (shown only once).
 
 ### 2. Register the token in GitHub Secrets
 
@@ -328,7 +342,7 @@ repository automatically, set up the following authentication settings:
 3. Click **New repository secret**.
 4. Add the secret with:
    - **Name**: `BITBUCKET_API_TOKEN`
-   - **Secret**: The copied **Bitbucket App password**
+   - **Secret**: The copied **Bitbucket API token**
 5. Click **Add secret** to save.
 
 ### 3. Register Repository Variables in GitHub
