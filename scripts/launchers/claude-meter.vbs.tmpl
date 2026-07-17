@@ -1,0 +1,6 @@
+Option Explicit
+
+Dim shell
+Set shell = CreateObject("WScript.Shell")
+shell.CurrentDirectory = __REPO_ROOT__
+shell.Run __CLAUDE_METER_PATH__ + " start", 0, False

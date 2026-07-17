@@ -4,7 +4,7 @@
 # Intended usage:
 #     (tmp="$(mktemp)" && curl -fsSL -o "$tmp" \
 #       https://raw.githubusercontent.com/yohi/claude-meter/master/install.sh \
-#       && sh "$tmp"; status=$?; rm -f "$tmp"; exit $status)
+#       && sh "$tmp"; rc=$?; rm -f "$tmp"; exit $rc)
 #
 # Downloading to a temp file first (rather than piping curl directly into
 # `sh`) means `sh` only runs after `curl` has exited successfully, so a
@@ -46,6 +46,11 @@ info() {
 # Print an error message to stderr.
 err() {
 	printf 'Error: %s\n' "$1" >&2
+}
+
+# Print a warning message to stderr.
+warn() {
+	printf 'Warning: %s\n' "$1" >&2
 }
 
 # Resolve the git ref to install. Defaults to the latest published release
@@ -133,6 +138,7 @@ run_init() {
 # is no `cd` into a repo directory and no reference to repo-local files.
 create_launcher() {
 	os="$(uname -s)"
+	icon_path="$HOME/.local/share/icons/claude-meter.png"
 	# Embed the *resolved* absolute path rather than a bare `claude-meter`
 	# command name: double-clicking a desktop/GUI launcher does not always
 	# inherit this session's PATH (see ensure_on_path above), so relying on
@@ -140,14 +146,38 @@ create_launcher() {
 	# launcher exists to solve.
 	claude_meter_path="$(command -v claude-meter)"
 	if [ "$os" = "Darwin" ]; then
-		launcher="$HOME/Desktop/claude-meter.command"
+		launcher="$HOME/Desktop/claude-meter.app"
+		debug_launcher="$HOME/Desktop/claude-meter-debug.command"
 		info "Creating macOS launcher: $launcher"
 		mkdir -p "$HOME/Desktop"
-		cat >"$launcher" <<LAUNCHER
+		mkdir -p "$launcher/Contents/MacOS"
+		cat >"$launcher/Contents/MacOS/claude-meter" <<LAUNCHER
 #!/bin/bash
 "$claude_meter_path" start
 LAUNCHER
-		chmod +x "$launcher"
+		chmod +x "$launcher/Contents/MacOS/claude-meter"
+		cat >"$launcher/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>claude-meter</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.claude-meter.launcher</string>
+    <key>CFBundleName</key>
+    <string>claude-meter</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+</dict>
+</plist>
+PLIST
+		cat >"$debug_launcher" <<LAUNCHER
+#!/bin/bash
+"$claude_meter_path" start
+exec "$SHELL"
+LAUNCHER
+		chmod +x "$debug_launcher"
 	else
 		launcher_dir="$HOME/.local/share/applications"
 		launcher="$launcher_dir/claude-meter.desktop"
@@ -158,12 +188,33 @@ LAUNCHER
 Type=Application
 Name=claude-meter
 Comment=Local ClaudeCode usage and cost dashboard
-Exec=bash -c '"$claude_meter_path" start; exec "\$SHELL"'
-Icon=utilities-terminal
-Terminal=true
+Exec="$claude_meter_path" start
+Icon=$icon_path
+Terminal=false
 Categories=Utility;Development;
+Actions=Debug;
+
+[Desktop Action Debug]
+Name=デバッグモードで開く
+Exec=bash -c '"$claude_meter_path" start; exec "\$SHELL"'
+Terminal=true
 LAUNCHER
 	fi
+}
+
+# Install the icon separately because assets/icon.png is outside the Python
+# package included in the uv/pip distribution.
+install_icon() {
+	icon_path="$HOME/.local/share/icons/claude-meter.png"
+	icon_url="https://raw.githubusercontent.com/yohi/claude-meter/${ref}/assets/icon.png"
+	info "Installing application icon: $icon_path"
+	mkdir -p "$(dirname "$icon_path")"
+	if curl -fsSL -o "$icon_path" "$icon_url"; then
+		return 0
+	fi
+	warn "Failed to download icon from $icon_url; continuing without it"
+	rm -f "$icon_path"
+	return 0
 }
 
 main() {
@@ -171,6 +222,7 @@ main() {
 	install_package
 	ensure_on_path
 	run_init
+	install_icon
 	create_launcher
 	info "Done. Launch the dashboard any time with: claude-meter start"
 }

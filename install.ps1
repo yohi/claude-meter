@@ -113,7 +113,7 @@ else {
 }
 
 # 2. Verify the command is reachable on PATH and resolve its absolute path.
-# Desktop/GUI launches (double-clicking claude-meter.bat below) do not always
+# Desktop/GUI launches do not always
 # inherit this session's PATH, so the launcher embeds this resolved path
 # directly rather than relying on a bare `claude-meter` command lookup.
 $ClaudeMeterCommand = Get-Command -Name "claude-meter" -ErrorAction SilentlyContinue
@@ -126,16 +126,25 @@ $ClaudeMeterPath = $ClaudeMeterCommand.Source
 Write-Host "==> Initializing claude-meter (claude-meter init)..."
 claude-meter init
 
-# 4. Create a double-clickable desktop launcher that runs `claude-meter start`.
+# 4. Create normal and debug desktop launchers.
 Write-Host "==> Creating Windows desktop launcher..."
 $DesktopPath = [Environment]::GetFolderPath("Desktop")
-$LauncherPath = Join-Path $DesktopPath "claude-meter.bat"
+$LauncherPath = Join-Path $DesktopPath "claude-meter.vbs"
 $LauncherContent = @"
+Option Explicit
+Dim shell
+Set shell = CreateObject("WScript.Shell")
+shell.Run """$ClaudeMeterPath"" start", 0, False
+"@
+Set-Content -Path $LauncherPath -Value $LauncherContent -Encoding utf8BOM
+$DebugLauncherPath = Join-Path $DesktopPath "claude-meter-debug.bat"
+$DebugLauncherContent = @"
 @echo off
 "$ClaudeMeterPath" start
 cmd /k
 "@
-Set-Content -Path $LauncherPath -Value $LauncherContent -Encoding ascii
+Set-Content -Path $DebugLauncherPath -Value $DebugLauncherContent -Encoding utf8BOM
 Write-Host "==> Created launcher: $LauncherPath"
+Write-Host "==> Created debug launcher: $DebugLauncherPath"
 
 Write-Host "==> Done. Launch the dashboard by double-clicking the launcher or running: claude-meter start"

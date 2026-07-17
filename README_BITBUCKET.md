@@ -1,9 +1,12 @@
-<!-- markdownlint-disable MD033 MD041 -->
-<table><tr>
-<td><img src="assets/icon.png" width="60" alt="claude-meter icon"></td>
-<td><h1>claude-meter</h1></td>
-</tr></table>
-<!-- markdownlint-enable MD033 MD041 -->
+<!-- markdownlint-disable MD033 MD013 -->
+<h1>
+    <img src="assets/icon.png" width="60" alt="claude-meter icon">
+    <br />
+    claude-meter
+</h1>
+<!-- markdownlint-enable MD033 MD013 -->
+
+Local-only analyzer for ClaudeCode usage and estimated AWS Bedrock cost.
 
 ClaudeCodeの利用ログおよびAWS Bedrockの推定コストを解析・表示する、ローカル完結型のツールです。
 
@@ -43,10 +46,12 @@ export BITBUCKET_API_TOKEN=<your-repository-access-token>
 (tmp="$(mktemp)" && printf 'header = "Authorization: Bearer %s"\n' "$BITBUCKET_API_TOKEN" \
   | curl -fsSL -K - -o "$tmp" \
   "https://api.bitbucket.org/2.0/repositories/<BITBUCKET_WORKSPACE_NAME>/<BITBUCKET_REPOSITORY_NAME>/src/master/install.sh" \
-  && sh "$tmp"; status=$?; rm -f "$tmp"; exit $status)
+  && sh "$tmp"; rc=$?; rm -f "$tmp"; exit $rc)
 ```
 
 上記のコマンドはリモートのスクリプトを一時ファイルにダウンロードしてから実行します。`curl` が完全に成功した場合のみ `sh` が実行されるため、ダウンロード中に回線が切断されて不完全なスクリプトが実行されてしまうリスクを防げます。一時ファイルは実行後（失敗時も含め）に削除されます。安全のため、実行前にスクリプトの内容を必ず確認することを推奨します。
+
+終了コードの一時保存には `rc` を使用しています。zshでは `status` が読み取り専用のシェル変数として予約されているためです。
 
 `curl -H "Authorization: Bearer $BITBUCKET_API_TOKEN"` は展開後のトークンがそのまま `curl` の
 コマンドライン引数として渡され、実行中は同じホスト上の他ユーザーが `ps aux` や
@@ -174,6 +179,14 @@ ui:
 | Windows | `%LOCALAPPDATA%\Claude` |
 
 アーキテクチャ、データソース、SQLiteスキーマ、モデル正規化、UIページの設計、および対象外とする要件の詳細については、[SPEC.md](SPEC.md)（英語）を参照してください。
+
+## デスクトップランチャー
+
+ワンラインインストーラーは通常起動用のランチャーと、ターミナルを表示するデバッグ用ランチャーを作成します。
+
+- Linux: アプリを右クリックして **デバッグモードで開く** を選択します。
+- macOS: 通常は `~/Desktop/claude-meter.app`、デバッグ時は `~/Desktop/claude-meter-debug.command` を使用します。
+- Windows: 通常は `%USERPROFILE%\Desktop\claude-meter.vbs`、デバッグ時は `%USERPROFILE%\Desktop\claude-meter-debug.bat` を使用します。
 
 ## コスト計算方法
 

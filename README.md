@@ -1,9 +1,10 @@
-<!-- markdownlint-disable MD033 MD041 -->
-<table><tr>
-<td><img src="assets/icon.png" width="60" alt="claude-meter icon"></td>
-<td><h1>claude-meter</h1></td>
-</tr></table>
-<!-- markdownlint-enable MD033 MD041 -->
+<!-- markdownlint-disable MD033 MD013 -->
+<h1>
+    <img src="assets/icon.png" width="60" alt="claude-meter icon">
+    <br />
+    claude-meter
+</h1>
+<!-- markdownlint-enable MD033 MD013 -->
 
 Local-only analyzer for ClaudeCode usage and estimated AWS Bedrock cost.
 
@@ -24,7 +25,7 @@ desktop launcher automatically:
 <!-- markdownlint-disable MD013 -->
 ```bash
 (tmp="$(mktemp)" && curl -fsSL -o "$tmp" https://raw.githubusercontent.com/yohi/claude-meter/master/install.sh \
-  && sh "$tmp"; status=$?; rm -f "$tmp"; exit $status)
+  && sh "$tmp"; rc=$?; rm -f "$tmp"; exit $rc)
 ```
 
 ```powershell
@@ -58,6 +59,9 @@ would otherwise block running an unsigned `.ps1` file directly.
 `Invoke-Expression` evaluates content as a string rather than running a
 script file, so it isn't subject to that restriction. For safety, review
 the downloaded script's contents before it runs.
+
+The POSIX example uses `rc` rather than `status` because zsh reserves
+`status` as a read-only shell variable.
 
 Note: this fetches `install.sh`/`install.ps1` from the `master` branch, so the
 bootstrap fetch itself is not pinned to an immutable release; only the
@@ -178,17 +182,24 @@ to a ready-to-use location:
 | OS | Generated launcher |
 | --- | --- |
 | Linux | `~/.local/share/applications/claude-meter.desktop` |
-| macOS | `~/Desktop/claude-meter.command` (marked executable) |
-| Windows | `%USERPROFILE%\Desktop\claude-meter.bat` |
+| macOS | `~/Desktop/claude-meter.app` |
+| Windows | `%USERPROFILE%\Desktop\claude-meter.vbs` |
 
 The launcher only calls the `claude-meter` command, so that command must be on
 your `PATH` first (e.g. after `pip install -e .` or `uv tool install .`).
 
-To use a custom icon, place an image at `assets/icon.png`; the Linux
-`.desktop` entry references it automatically. On macOS you must set the
-icon manually (select the `.command` file in Finder, press Cmd+I, then
-drag an image onto the icon in the title bar). On Windows, create a
-shortcut to the `.bat` and set its icon via Properties -> Change Icon.
+On Linux, right-click the launcher and choose **デバッグモードで開く** to start
+with a terminal. On macOS, use `~/Desktop/claude-meter-debug.command`; on
+Windows, use `%USERPROFILE%\Desktop\claude-meter-debug.bat` for the equivalent
+terminal-based launch.
+
+For a launcher generated from a local clone, place an image at `assets/icon.png`;
+the Linux `.desktop` entry references it automatically. The one-line installer
+downloads this same image to `~/.local/share/icons/claude-meter.png` and uses it
+for the generated Linux launcher. On macOS you must set the icon manually
+(select the `.app` in Finder, press Cmd+I, then drag an image onto the icon in
+the title bar). On Windows, create a shortcut to the `.vbs` and set its icon via
+Properties -> Change Icon.
 
 ## Configuration
 
