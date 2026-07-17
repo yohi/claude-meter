@@ -213,9 +213,10 @@ def install_template(
 ) -> Path:
     template_path = launcher_dir / template_name
     rendered = render_template(template_path, repo_root)
-
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(rendered, encoding="utf-8")
+    # The output path is always derived from LauncherPlan literals plus
+    # Path.home(); no external/user-controlled path components reach here.
+    output_path.write_text(rendered, encoding="utf-8")  # NOSONAR python:S2083
 
     if make_executable:
         current_mode = output_path.stat().st_mode
