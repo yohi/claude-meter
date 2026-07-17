@@ -1,30 +1,31 @@
 """Cross-platform installer for the claude-meter desktop launcher.
 
 This script renders the operating-system-appropriate launcher template shipped
-under ``scripts/launchers/`` (Linux ``.desktop``, macOS ``.command``, or Windows
-``.bat``), substitutes the ``__REPO_ROOT__`` placeholder with the absolute path
+under ``scripts/launchers/`` (Linux ``.desktop``, macOS ``.app`` bundle, or Windows
+``.vbs``), substitutes the ``__REPO_ROOT__`` placeholder with the absolute path
 of this repository, and writes the result to a location where it can be
 double-clicked:
 
 * Linux:   ``~/.local/share/applications/claude-meter.desktop``
-* macOS:   ``~/Desktop/claude-meter.command`` (marked executable)
-* Windows: ``%USERPROFILE%\\Desktop\\claude-meter.bat``
+* macOS:   ``~/Desktop/claude-meter.app`` (bundle with executable)
+* Windows: ``%USERPROFILE%\\Desktop\\claude-meter.vbs``
 
 Run it directly with ``python scripts/launchers/install.py``. It only relies on
 the Python standard library and never hard-codes machine-specific absolute
 paths: the repository root is resolved dynamically at run time.
 
 The repository root is substituted into each launcher's *executable* shell/cmd
-context (a ``cd``/``bash -c`` argument), so it is escaped per destination
-format (POSIX shell single-quoting for ``.command``, ``cmd.exe`` double-quoting
-for ``.bat``, and bash double-quote escaping for the ``.desktop`` ``Exec=``
-line) before substitution. This prevents a repository path containing quotes,
-backslashes, or ``$``/backtick command-substitution characters from breaking or
-hijacking the generated launcher. A handful of pathological characters (a
-literal single quote for ``.desktop``, a literal double quote for ``.bat``, or
-any line break) cannot be safely represented in the destination format at all
-and are rejected outright with ``ValueError`` rather than silently producing a
-broken or exploitable launcher.
+context (a ``cd``/``bash -c`` argument or a WScript ``CurrentDirectory``
+assignment), so it is escaped per destination format (POSIX shell
+single-quoting for ``.command``, ``cmd.exe`` double-quoting for ``.bat``,
+VBScript double-quoting for ``.vbs``, and bash double-quote escaping for the
+``.desktop`` ``Exec=`` line) before substitution. This prevents a repository path
+containing quotes, backslashes, or ``$``/backtick command-substitution characters
+from breaking or hijacking the generated launcher. A handful of pathological
+characters (a literal single quote for ``.desktop``, a literal double quote for
+``.bat``/``.vbs``, or any line break) cannot be safely represented in the
+destination format at all and are rejected outright with ``ValueError`` rather
+than silently producing a broken or exploitable launcher.
 """
 
 from __future__ import annotations
