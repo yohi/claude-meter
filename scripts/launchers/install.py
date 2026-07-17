@@ -25,7 +25,7 @@ VBScript double-quoting for ``.vbs``, and bash double-quote escaping for the
 containing quotes, backslashes, or ``$``/backtick command-substitution characters
 from breaking or hijacking the generated launcher. A handful of pathological
 characters (a literal single quote for ``.desktop``, a literal double quote for
-``.bat``/``.vbs``, or any line break) cannot be safely represented in the
+``.bat``, or any line break) cannot be safely represented in the
 destination format at all and are rejected outright with ``ValueError`` rather
 than silently producing a broken or exploitable launcher.
 
