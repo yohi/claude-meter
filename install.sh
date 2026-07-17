@@ -46,6 +46,11 @@ info() {
 # Print an error message to stderr.
 err() {
 	printf 'Error: %s\n' "$1" >&2
+# Print a warning message to stderr.
+warn() {
+	printf 'Warning: %s\n' "$1" >&2
+}
+
 }
 
 # Resolve the git ref to install. Defaults to the latest published release
@@ -202,7 +207,12 @@ install_icon() {
 	icon_path="$HOME/.local/share/icons/claude-meter.png"
 	icon_url="https://raw.githubusercontent.com/yohi/claude-meter/${ref}/assets/icon.png"
 	info "Installing application icon: $icon_path"
-	mkdir -p "$(dirname "$icon_path")"
+	if curl -fsSL -o "$icon_path" "$icon_url"; then
+		return 0
+	fi
+	warn "Failed to download icon from $icon_url; continuing without it"
+	rm -f "$icon_path"
+	return 0
 	curl -fsSL -o "$icon_path" "$icon_url"
 }
 
