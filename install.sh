@@ -145,7 +145,7 @@ create_launcher() {
 		debug_launcher="$HOME/Desktop/claude-meter-debug.command"
 		info "Creating macOS launcher: $launcher"
 		mkdir -p "$HOME/Desktop"
-mkdir -p "$launcher/Contents/MacOS"
+		mkdir -p "$launcher/Contents/MacOS"
 		cat >"$launcher/Contents/MacOS/claude-meter" <<LAUNCHER
 #!/bin/bash
 "$claude_meter_path" start
