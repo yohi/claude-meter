@@ -136,14 +136,14 @@ Dim shell
 Set shell = CreateObject("WScript.Shell")
 shell.Run """$ClaudeMeterPath"" start", 0, False
 "@
-Set-Content -Path $LauncherPath -Value $LauncherContent -Encoding utf8BOM
+Set-Content -Path $LauncherPath -Value $LauncherContent -Encoding ascii
 $DebugLauncherPath = Join-Path $DesktopPath "claude-meter-debug.bat"
 $DebugLauncherContent = @"
 @echo off
 "$ClaudeMeterPath" start
 cmd /k
 "@
-Set-Content -Path $DebugLauncherPath -Value $DebugLauncherContent -Encoding utf8BOM
+Set-Content -Path $DebugLauncherPath -Value $DebugLauncherContent -Encoding ascii
 Write-Host "==> Created launcher: $LauncherPath"
 Write-Host "==> Created debug launcher: $DebugLauncherPath"
 
