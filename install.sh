@@ -46,11 +46,11 @@ info() {
 # Print an error message to stderr.
 err() {
 	printf 'Error: %s\n' "$1" >&2
+}
+
 # Print a warning message to stderr.
 warn() {
 	printf 'Warning: %s\n' "$1" >&2
-}
-
 }
 
 # Resolve the git ref to install. Defaults to the latest published release
@@ -175,6 +175,7 @@ PLIST
 		cat >"$debug_launcher" <<LAUNCHER
 #!/bin/bash
 "$claude_meter_path" start
+exec "$SHELL"
 LAUNCHER
 		chmod +x "$debug_launcher"
 	else
@@ -187,7 +188,7 @@ LAUNCHER
 Type=Application
 Name=claude-meter
 Comment=Local ClaudeCode usage and cost dashboard
-Exec=bash -c '"$claude_meter_path" start; exec "\$SHELL"'
+Exec="$claude_meter_path" start
 Icon=$icon_path
 Terminal=false
 Categories=Utility;Development;
@@ -207,13 +208,13 @@ install_icon() {
 	icon_path="$HOME/.local/share/icons/claude-meter.png"
 	icon_url="https://raw.githubusercontent.com/yohi/claude-meter/${ref}/assets/icon.png"
 	info "Installing application icon: $icon_path"
+	mkdir -p "$(dirname "$icon_path")"
 	if curl -fsSL -o "$icon_path" "$icon_url"; then
 		return 0
 	fi
 	warn "Failed to download icon from $icon_url; continuing without it"
 	rm -f "$icon_path"
 	return 0
-	curl -fsSL -o "$icon_path" "$icon_url"
 }
 
 main() {
