@@ -4,12 +4,6 @@ on:
   push:
     branches:
       - master
-  workflow_dispatch:
-    inputs:
-      force_version:
-        description: '強制デプロイするバージョンタグ (例: v1.1.0)'
-        required: true
-        default: ''
 
 permissions:
   contents: write
@@ -27,24 +21,23 @@ jobs:
       # 1. release-please-action でリリースPR / タグ作成を自動化
       - uses: googleapis/release-please-action@8b8fd2cc23b2e18957157a9d923d75aa0c6f6ad5 # v4
         id: release
-        if: ${{ github.event_name == 'push' }}
         with:
           release-type: python
           target-branch: master
 
-      # ---- 以下、リリースが作成された場合、または手動実行の場合のみ実行 ----
+      # ---- 以下、リリースが作成された場合のみ実行 ----
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        if: ${{ steps.release.outputs.release_created || github.event_name == 'workflow_dispatch' }}
+        if: ${{ steps.release.outputs.release_created }}
         with:
-          ref: ${{ steps.release.outputs.tag_name || github.event.inputs.force_version }}
+          ref: ${{ steps.release.outputs.tag_name }}
 
       # 2. uv のセットアップとビルド
       - name: Install uv
         uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
-        if: ${{ steps.release.outputs.release_created || github.event_name == 'workflow_dispatch' }}
+        if: ${{ steps.release.outputs.release_created }}
       - name: Build packages
         run: uv build
-        if: ${{ steps.release.outputs.release_created || github.event_name == 'workflow_dispatch' }}
+        if: ${{ steps.release.outputs.release_created }}
 
       # 3. Bitbucket リポジトリのクローン
       - name: Clone Bitbucket Repo
@@ -72,13 +65,13 @@ jobs:
           cd bitbucket-repo
           git config user.name "${GIT_USER_NAME:-github-actions[bot]}"
           git config user.email "${GIT_USER_EMAIL:-github-actions[bot]@users.noreply.github.com}"
-        if: ${{ steps.release.outputs.release_created || github.event_name == 'workflow_dispatch' }}
+        if: ${{ steps.release.outputs.release_created }}
 
       # 4. ビルド成果物 (.whl / .tar.gz) およびソースファイルをコピーしてプッシュ
       - name: Copy Packages and Push
         env:
           BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
-          RELEASE_TAG: ${{ steps.release.outputs.tag_name || github.event.inputs.force_version }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag_name }}
         run: |
           set -euo pipefail
           : "${BITBUCKET_WORKSPACE_NAME:?BITBUCKET_WORKSPACE_NAME is required}"
@@ -154,4 +147,4 @@ jobs:
           # デプロイしたコミットにリリースタグを設定してプッシュ (git+httpsでのタグ付きインストールに対応するため)
           git tag -f "${RELEASE_TAG}" HEAD
           git push --force origin "${RELEASE_TAG}"
-        if: ${{ steps.release.outputs.release_created || github.event_name == 'workflow_dispatch' }}
+        if: ${{ steps.release.outputs.release_created }}
