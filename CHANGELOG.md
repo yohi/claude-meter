@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.2](https://github.com/yohi/claude-meter/compare/v1.1.1...v1.1.2) (2026-07-21)
+
+
+### Documentation
+
+* README_BITBUCKET.mdのロゴ画像をMarkdown形式に修正 ([210d8c3](https://github.com/yohi/claude-meter/commit/210d8c3275d4cc05bdb8a1af14b4148dc469298a))
+* README_BITBUCKET.mdのロゴ画像をMarkdown形式に修正し、60pxのアイコン画像を追加 ([8a23810](https://github.com/yohi/claude-meter/commit/8a238104065d21daa8e9d7bcb38f836e3b8f89b8))
+
 ## [1.1.0](https://github.com/yohi/claude-meter/compare/v1.0.0...v1.1.0) (2026-07-17)
 
 
