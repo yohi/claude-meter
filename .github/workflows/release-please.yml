@@ -33,10 +33,19 @@ jobs:
           target-branch: master
 
       # ---- 以下、リリースが作成された場合、または手動実行の場合のみ実行 ----
+      - name: Validate force_version
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          VERSION="${{ github.event.inputs.force_version }}"
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-.+)?$ ]]; then
+            echo "Error: force_version must match v<semver> format (e.g. v1.1.0)" >&2
+            exit 1
+          fi
+
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         if: ${{ steps.release.outputs.release_created || github.event_name == 'workflow_dispatch' }}
         with:
-          ref: ${{ steps.release.outputs.tag_name || github.event.inputs.force_version }}
+          ref: ${{ steps.release.outputs.tag_name || format('refs/tags/{0}', github.event.inputs.force_version) }}
 
       # 2. uv のセットアップとビルド
       - name: Install uv
