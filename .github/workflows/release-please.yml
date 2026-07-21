@@ -5,11 +5,6 @@ on:
     branches:
       - master
   workflow_dispatch:
-    inputs:
-      force_version:
-        description: '強制デプロイするバージョンタグ (例: v1.1.0)'
-        required: true
-        default: ''
 
 permissions:
   contents: write
@@ -33,19 +28,22 @@ jobs:
           target-branch: master
 
       # ---- 以下、リリースが作成された場合、または手動実行の場合のみ実行 ----
-      - name: Validate force_version
+      - name: Validate selected ref
         if: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
-          VERSION="${{ github.event.inputs.force_version }}"
-          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-.+)?$ ]]; then
-            echo "Error: force_version must match v<semver> format (e.g. v1.1.0)" >&2
+          if [ "${{ github.ref_type }}" != "tag" ]; then
+            echo "Error: Please run this workflow by selecting a TAG (not a branch) in 'Use workflow from'." >&2
+            exit 1
+          fi
+          if [[ ! "${{ github.ref_name }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-.+)?$ ]]; then
+            echo "Error: Selected tag '${{ github.ref_name }}' does not match v<semver> format (e.g. v1.1.0)." >&2
             exit 1
           fi
 
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         if: ${{ steps.release.outputs.release_created || github.event_name == 'workflow_dispatch' }}
         with:
-          ref: ${{ steps.release.outputs.tag_name || format('refs/tags/{0}', github.event.inputs.force_version) }}
+          ref: ${{ steps.release.outputs.tag_name || github.ref }}
 
       # 2. uv のセットアップとビルド
       - name: Install uv
@@ -87,7 +85,7 @@ jobs:
       - name: Copy Packages and Push
         env:
           BITBUCKET_API_TOKEN: ${{ secrets.BITBUCKET_API_TOKEN }}
-          RELEASE_TAG: ${{ steps.release.outputs.tag_name || github.event.inputs.force_version }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag_name || github.ref_name }}
         run: |
           set -euo pipefail
           : "${BITBUCKET_WORKSPACE_NAME:?BITBUCKET_WORKSPACE_NAME is required}"
