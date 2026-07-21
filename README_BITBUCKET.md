@@ -1,10 +1,5 @@
-<!-- markdownlint-disable MD033 MD013 -->
-<h1>
-    <img src="assets/icon.png" width="60" alt="claude-meter icon">
-    <br />
-    claude-meter
-</h1>
-<!-- markdownlint-enable MD033 MD013 -->
+<!-- markdownlint-disable MD013 MD022 MD012 -->
+# ![claude-meter icon](assets/icon-60.png) claude-meter
 
 Local-only analyzer for ClaudeCode usage and estimated AWS Bedrock cost.
 
@@ -21,7 +16,7 @@ uv run claude-meter start   # または: uv run cm start
 
 ### ワンラインインストール（ローカルクローン不要）
 
-<!-- markdownlint-disable MD013 -->
+
 
 > **重要**: Bitbucket App passwords は Atlassian により非推奨となりました。2026年7月28日に完全に削除されます。詳細は以下の通りです:
 >
@@ -62,11 +57,11 @@ export BITBUCKET_API_TOKEN=<your-repository-access-token>
 改版不変（immutable）な参照には固定されていません。インストールされる `claude-meter`
 パッケージ自体は、インストーラーがBitbucket APIから解決した最新タグに固定され、解決に失敗した
 場合は未レビューのデフォルトブランチへフォールバックせず処理を中断します。
-<!-- markdownlint-enable MD013 -->
+
 
 ### `uvx` を使用する場合（Bitbucketリポジトリから直接実行）
 
-<!-- markdownlint-disable MD013 -->
+
 ```bash
 # Gitリポジトリから直接実行する場合
 # ※プライベートリポジトリの場合は、SSH接続（git+ssh://）を使用するか、下記のHTTPS接続の例（GIT_ASKPASS使用）を参照してください。
@@ -85,7 +80,7 @@ uvx --from git+https://bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/claude-meter.git
 # GIT_ASKPASS="$askpass" uvx --from "git+https://x-token-auth@bitbucket.org/<BITBUCKET_WORKSPACE_NAME>/claude-meter.git" claude-meter start
 # rm -f "$askpass"
 ```
-<!-- markdownlint-enable MD013 -->
+
 
 ### `pip` を使用する場合
 
