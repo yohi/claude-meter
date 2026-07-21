@@ -1,5 +1,33 @@
 # Changelog
 
+## [1.1.0](https://github.com/yohi/claude-meter/compare/v1.0.0...v1.1.0) (2026-07-17)
+
+
+### Features
+
+* **launchers:** claude-meter実行パスをテンプレートに埋め込み、Info.plistにバージョン追加 ([9b0cd3d](https://github.com/yohi/claude-meter/commit/9b0cd3d141084dfafb2eb695d2be36683d460826))
+* デバッグ用ランチャーを追加 ([2928837](https://github.com/yohi/claude-meter/commit/292883755776e4da9e53f4a9bb14fb0582dbd0f4))
+* デバッグ用ランチャーを追加 ([294a86a](https://github.com/yohi/claude-meter/commit/294a86a4de51c00a72e4c6280fa2230fb7d0f5d9))
+
+
+### Bug Fixes
+
+* **installers:** POSIXシェルでwarn関数がerr内にネストされていたのを修正 ([f4dffdd](https://github.com/yohi/claude-meter/commit/f4dffddd6e55c78c61d9d4d362f3162eec19f05d))
+* **installers:** PowerShell出力エンコーディングをutf8BOMに変更 ([c06e5d3](https://github.com/yohi/claude-meter/commit/c06e5d38a22136aac40fee051bc0475d5c42d568))
+* **installers:** アイコン取得失敗時もインストールを継続するよう修正 ([d1079ec](https://github.com/yohi/claude-meter/commit/d1079ec7ef7c269df4b385a20a296037c39c93a9))
+* **install:** Windows ランチャーのエンコーディングを utf8BOM から ascii に変更 ([ea1b4a6](https://github.com/yohi/claude-meter/commit/ea1b4a6746d512b9a4849f5a9366fbb405117003))
+* **install:** Windowsランチャーをutf8BOMエンコーディングで保存し非ASCIIパスに対応 ([3444449](https://github.com/yohi/claude-meter/commit/344444961824d4cbdd8c89b3698741f5e9b131c3))
+* **launchers:** SonarのPath traversal警告をNOSONARで抑制 ([de03b0c](https://github.com/yohi/claude-meter/commit/de03b0c0ac6d279e054702a82be1ca0f2e7171b7))
+* **launchers:** Windows VBSテンプレートにshell.Runを追加 ([82da280](https://github.com/yohi/claude-meter/commit/82da2801355e48477f3cca548625f327e6ef6a43))
+* READMEの画像位置指定をCSSに変更 ([9f2cfde](https://github.com/yohi/claude-meter/commit/9f2cfde84df8093592dd94ae5c2d1325312a710d))
+* Ubuntuランチャーのアイコン指定を修正 ([cc8f2d9](https://github.com/yohi/claude-meter/commit/cc8f2d96d145e28f1850b4c6a6febf05fc636a82))
+
+
+### Documentation
+
+* **launchers:** install.pyのdocstringと.vbs実装を一致させる ([957003e](https://github.com/yohi/claude-meter/commit/957003e03bc429ae1ef64b8c2030f95c49bea7d1))
+* **launchers:** install.pyのdocstringを現在の出力形式に更新 ([1b1057a](https://github.com/yohi/claude-meter/commit/1b1057ae37df903069d59050ec8d8419a4981a20))
+
 ## [1.0.0](https://github.com/yohi/claude-meter/compare/v0.9.1...v1.0.0) (2026-07-16)
 
 
